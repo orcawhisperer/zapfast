@@ -864,6 +864,10 @@ pub async fn run(
 ) {
     let archive = loop {
         let path = dirs.archive_db();
+        #[cfg(target_arch = "wasm32")]
+        if let Err(error) = crate::archive::prepare_key(&path).await {
+            log::error!("could not make the archive's key: {error:#}");
+        }
         let opened = crate::platform::spawn_blocking(move || Archive::open(&path)).await;
         match opened {
             Ok(Ok(archive)) => break archive,

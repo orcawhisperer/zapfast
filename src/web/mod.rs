@@ -5,12 +5,14 @@
 mod entry;
 pub mod file;
 pub mod http;
+pub mod idb;
 pub mod images;
 pub mod keys;
 pub mod open;
 pub mod rfd;
 pub mod runtime;
 pub mod sfs;
+pub mod sqlite;
 pub mod tasks;
 pub mod time;
 pub mod tokio_fs;

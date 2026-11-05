@@ -241,12 +241,17 @@ tokio = { version = "1", features = ["rt", "sync", "time", "macros", "io-util"] 
 rusqlite = "0.40"
 # Encrypts the archive here, since SQLCipher's OpenSSL does not build for a page.
 sqlite-wasm-rs = { version = "0.5", default-features = false, features = ["sqlite3mc"] }
+# Keeps the databases in IndexedDB. Its durable sibling needs a dedicated worker.
+sqlite-wasm-vfs = "0.2"
+# The device store's settings, which the VFS requires. Already included through
+# whatsapp-rust.
+whatsapp-rust-sqlite-storage = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "e634d245f71d66e2ae55f79ef714c4ca01615ed8", default-features = false }
 ring = { version = "0.17", features = ["wasm32_unknown_unknown_js"] }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["BinaryType", "CloseEvent", "Event", "Headers", "MessageEvent", "Request", "RequestInit", "RequestMode", "RequestRedirect", "Response", "Document", "Element", "HtmlCanvasElement", "Location", "WebSocket", "Window", "WorkerGlobalScope"] }
+web-sys = { version = "0.3", features = ["BinaryType", "CloseEvent", "Event", "Headers", "MessageEvent", "Request", "RequestInit", "RequestMode", "RequestRedirect", "Response", "Crypto", "CryptoKey", "Document", "Element", "IdbDatabase", "IdbFactory", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "SubtleCrypto", "HtmlCanvasElement", "Location", "Navigator", "StorageManager", "WebSocket", "Window", "WorkerGlobalScope"] }
 # std::time::Instant panics on wasm32-unknown-unknown.
 web-time = "1"
 # Its clock asks the browser here.

@@ -45,6 +45,33 @@ pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
     }
 }
 
+/// Makes sure the page has this database's key saved before it is first created.
+#[cfg(target_arch = "wasm32")]
+pub async fn prepare_key(path: &Path) -> Result<()> {
+    let parent = path.parent().context("Archive has no parent directory")?;
+    fs::create_dir_all(parent)?;
+    crate::web::keys::prepare(&identity_for(parent)?).await
+}
+
+/// The key of the device store beside `session`, which a page must encrypt too:
+/// there it has no folder permissions to rely on.
+#[cfg(target_arch = "wasm32")]
+pub async fn session_key(session: &Path) -> Result<Zeroizing<String>> {
+    let parent = session
+        .parent()
+        .context("The session has no parent directory")?;
+    fs::create_dir_all(parent)?;
+    let identity = format!("session-{}", identity_for(parent)?);
+    crate::web::keys::prepare(&identity).await?;
+    let key = crate::web::keys::key_for(&identity)?;
+    Ok(Zeroizing::new(
+        key_literal(&key)
+            .trim_start_matches("x'")
+            .trim_end_matches('\'')
+            .to_owned(),
+    ))
+}
+
 /// Copies the keyring entry when an archive moves to another folder.
 pub fn copy_archive_key(old_archive: &Path, new_archive: &Path) -> Result<()> {
     if plaintext(old_archive)? {

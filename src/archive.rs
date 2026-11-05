@@ -20,6 +20,8 @@ pub use calls::CALL_LOG_LIMIT;
 mod drafts;
 mod encryption;
 pub use encryption::{archive_key_identity, copy_archive_key, forget_archive_key};
+#[cfg(target_arch = "wasm32")]
+pub use encryption::{prepare_key, session_key};
 mod favorites;
 pub use favorites::Favorite;
 mod labels;
@@ -488,6 +490,10 @@ impl Archive {
     }
 
     fn prepare(connection: Connection) -> Result<Self> {
+        // The page's VFS writes after a commit returns and refuses any other mode.
+        #[cfg(target_arch = "wasm32")]
+        connection.execute_batch("PRAGMA synchronous = OFF;")?;
+        #[cfg(not(target_arch = "wasm32"))]
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         connection.execute_batch(SCHEMA)?;
         connection.execute_batch(labels::SCHEMA)?;

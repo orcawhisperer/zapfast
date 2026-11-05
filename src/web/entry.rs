@@ -59,7 +59,95 @@ fn make_app(ctx: &egui::Context, waker: &fastframe_shell::Waker) -> Result<App, 
     Ok(app)
 }
 
+/// Holds the page's claim on the storage for as long as it lives. Two tabs on
+/// the same databases would corrupt them, and split one Signal session in two.
+async fn claim_storage() -> Result<(), String> {
+    use wasm_bindgen::closure::Closure;
+    let window = web_sys::window().ok_or("no window")?;
+    if !window.is_secure_context() {
+        return Err("ZapFast needs a secure page: open it over HTTPS.".to_owned());
+    }
+    let navigator = window.navigator();
+    let locks = js_sys::Reflect::get(&navigator, &"locks".into())
+        .ok()
+        .filter(|locks| !locks.is_undefined())
+        .ok_or("This browser cannot keep ZapFast to one tab.")?;
+    let (answer, answered) = futures::channel::oneshot::channel::<bool>();
+    let answer = std::cell::Cell::new(Some(answer));
+    let holder = Closure::<dyn FnMut(wasm_bindgen::JsValue) -> js_sys::Promise>::new(
+        move |lock: wasm_bindgen::JsValue| {
+            if let Some(answer) = answer.take() {
+                let _ = answer.send(!lock.is_null());
+            }
+            // Never settles, so the lock is held until the page goes away.
+            js_sys::Promise::new(&mut |_, _| {})
+        },
+    );
+    let options = js_sys::Object::new();
+    js_sys::Reflect::set(&options, &"ifAvailable".into(), &true.into())
+        .map_err(|_| "could not ask for the tab's lock")?;
+    let request = js_sys::Reflect::get(&locks, &"request".into())
+        .ok()
+        .and_then(|request| request.dyn_into::<js_sys::Function>().ok())
+        .ok_or("This browser cannot keep ZapFast to one tab.")?;
+    request
+        .call3(
+            &locks,
+            &"zapfast".into(),
+            &options,
+            holder.as_ref().unchecked_ref(),
+        )
+        .map_err(|_| "could not ask for the tab's lock")?;
+    holder.forget();
+    if answered.await.unwrap_or(false) {
+        Ok(())
+    } else {
+        Err("ZapFast is already open in another tab.".to_owned())
+    }
+}
+
+/// Asks the browser not to clear ZapFast's storage when space runs low. It may
+/// say no, and may ask the person.
+fn ask_to_persist() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(promise) = window.navigator().storage().persist() else {
+        return;
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        let granted = wasm_bindgen_futures::JsFuture::from(promise)
+            .await
+            .is_ok_and(|granted| granted.is_truthy());
+        if !granted {
+            log::warn!("the browser may clear ZapFast's storage if space runs low");
+        }
+    });
+}
+
+/// Loads everything the app reads without waiting: databases, keys and settings.
+async fn prepare_storage() -> Result<(), String> {
+    claim_storage().await?;
+    ask_to_persist();
+    crate::web::sqlite::install().await?;
+    let database = crate::web::idb::open().await?;
+    crate::web::keys::load(database.clone())
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    let root = std::path::Path::new(ROOT);
+    crate::web::sfs::hydrate(database, AppDirs::under(root).cache)
+        .await
+        .map_err(|error| error.to_string())
+}
+
 async fn run() -> Result<(), String> {
+    #[cfg(feature = "demo")]
+    let storage = !wants_demo();
+    #[cfg(not(feature = "demo"))]
+    let storage = true;
+    if storage {
+        prepare_storage().await?;
+    }
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or("no document")?;

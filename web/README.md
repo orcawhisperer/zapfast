@@ -10,10 +10,12 @@ You need the pinned toolchain's `wasm32-unknown-unknown` target, `clang`, and
 
 ```sh
 web/build.sh demo
-python3 -m http.server --directory dist/web 8000
+python3 -m http.server --bind 127.0.0.1 --directory dist/web 8000
 ```
 
-Then open <http://localhost:8000/?demo> for the sample chats.
+Then open <http://localhost:8000/?demo> for the sample chats, or
+<http://localhost:8000/> for a real account. The page needs a secure context, which
+`localhost` counts as: elsewhere it has to be served over HTTPS.
 
 ## How it fits together
 
@@ -30,19 +32,34 @@ Then open <http://localhost:8000/?demo> for the sample chats.
 - The interface with the sample chats: drawing, clicks, navigation, typing.
 - Without `?demo`, the socket to WhatsApp, the handshake, and the pairing QR code.
   Linking itself has not been tried with a phone.
+- Storage that survives a reload, kept to one tab at a time. The archive and the
+  device store are encrypted. Each has a random key, wrapped by a master key the
+  browser holds as non-extractable.
+
+## What storage costs
+
+- A commit reaches IndexedDB just after it returns, so a tab killed in between
+  loses it. A message comes back with the next history sync, and a Signal session
+  re-establishes. The durable alternative needs a dedicated worker.
+- Each database is held in memory while the page is open, so a large archive takes
+  that much memory and takes time to load.
+- The browser may clear its storage when space runs low, unless it grants
+  persistence. Clearing it unlinks the device.
+- The keys protect copied files, not a compromised page: code running in the page
+  can ask the browser to use them. Whoever serves the page can change that code.
+- Attachments stay in memory only, and are downloaded again after a reload.
 
 ## What does not work yet
 
-- **Keeping anything.** Settings, the session, and the archive live in memory and
-  are gone when the page closes, so a linked device stays listed on the phone
-  with nothing behind it. Do not link an account you care about yet.
 - **Colour emoji.** They draw in egui's monochrome font, and some have no glyph.
 - **Video and voice.** The H.264 and Opus stand-ins always refuse. They need
   WebCodecs.
-- **Downloads and avatars.** Several still use the blocking client, which always
-  fails in a page, rather than fetch.
+- **Avatars, GIF search, and sticker packs.** They still use the blocking client,
+  which always fails in a page, rather than fetch.
 - **Background work.** The app shares the page's one thread, so decoding and a
   history sync hold up drawing.
+- **Exporting a chat, and setting aside an unreadable archive.** Both need a second
+  way into a database, which this storage does not offer.
 - **Attachments, notifications, the clipboard for pictures, cameras, calls, and
   installing as an app.**
 

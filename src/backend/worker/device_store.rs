@@ -11,6 +11,29 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
 use whatsapp_rust::store::SqliteStore;
 
+/// A page's device store, encrypted like its archive: nothing else protects the
+/// Signal keys in the browser's storage. The key travels in the address, which
+/// SQLite3 Multiple Ciphers reads, so an error from here must never quote it.
+#[cfg(target_arch = "wasm32")]
+pub(super) async fn open(path: &Path) -> Result<SqliteStore> {
+    use whatsapp_rust_sqlite_storage::{SqliteDatabase, SqliteDatabaseConfig, Synchronous};
+    let key = crate::archive::session_key(path).await?;
+    let address = zeroize::Zeroizing::new(format!(
+        "file:{}?hexkey={}",
+        path.to_string_lossy(),
+        key.as_str()
+    ));
+    let config = SqliteDatabaseConfig {
+        synchronous: Synchronous::Off,
+        ..Default::default()
+    };
+    let database = SqliteDatabase::open(&address, config)
+        .await
+        .map_err(|_| anyhow::anyhow!("Could not open the device store"))?;
+    Ok(database.store(1))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) async fn open(path: &Path) -> Result<SqliteStore> {
     let store = SqliteStore::open(&path.to_string_lossy()).await;
     let path = path.to_owned();
@@ -21,6 +44,7 @@ pub(super) async fn open(path: &Path) -> Result<SqliteStore> {
     store.context("Could not open the device store")
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn preserve_legacy_column(path: &Path) -> Result<()> {
     if !path.checked_found()? {
         return Ok(());

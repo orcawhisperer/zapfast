@@ -2,7 +2,12 @@
 //!
 //! Files live in memory on the page's one thread, with the behaviour the app
 //! relies on: a write needs its folder, a rename replaces, a folder lists its
-//! children. Nothing here outlives the page yet.
+//! children. Once [`hydrate`] has run, changes are saved to IndexedDB in the
+//! background, except under the media cache, which WhatsApp can supply again and
+//! which would otherwise have to fit in memory at every start.
+//!
+//! Databases live in SQLite's own store (`web::sqlite`). They answer here too, so
+//! the code that checks for or deletes one needs no special case.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -19,6 +24,113 @@ struct Store {
 
 thread_local! {
     static STORE: RefCell<Store> = RefCell::new(Store::default());
+    static SAVING: RefCell<Saving> = RefCell::new(Saving::default());
+}
+
+/// Changes waiting to reach IndexedDB, in order.
+#[derive(Default)]
+struct Saving {
+    database: Option<web_sys::IdbDatabase>,
+    /// The folder that is never saved.
+    unsaved: PathBuf,
+    waiting: Vec<Change>,
+    running: bool,
+}
+
+enum Change {
+    File(PathBuf, Rc<Vec<u8>>),
+    Folder(PathBuf),
+    Gone(PathBuf),
+}
+
+/// How a stored entry says it is a folder. No path ends in a slash otherwise.
+const FOLDER_MARK: &str = "/";
+
+fn key_of(path: &Path, folder: bool) -> String {
+    let mut key = path.to_string_lossy().into_owned();
+    if folder {
+        key.push_str(FOLDER_MARK);
+    }
+    key
+}
+
+/// Queues a change for IndexedDB and starts saving if nothing is.
+fn save(change: Change) {
+    let start = SAVING.with_borrow_mut(|saving| {
+        let path = match &change {
+            Change::File(path, _) | Change::Folder(path) | Change::Gone(path) => path,
+        };
+        if saving.database.is_none() || path.starts_with(&saving.unsaved) {
+            return false;
+        }
+        saving.waiting.push(change);
+        !std::mem::replace(&mut saving.running, true)
+    });
+    if start {
+        wasm_bindgen_futures::spawn_local(save_waiting());
+    }
+}
+
+async fn save_waiting() {
+    use crate::web::idb::{self, Change as Stored};
+    loop {
+        let (database, batch) = SAVING.with_borrow_mut(|saving| {
+            (saving.database.clone(), std::mem::take(&mut saving.waiting))
+        });
+        let Some(database) = database.filter(|_| !batch.is_empty()) else {
+            SAVING.with_borrow_mut(|saving| saving.running = false);
+            return;
+        };
+        let changes = batch
+            .into_iter()
+            .flat_map(|change| match change {
+                Change::File(path, bytes) => {
+                    vec![Stored::Put(key_of(&path, false), idb::value_of(&bytes))]
+                }
+                Change::Folder(path) => vec![Stored::Put(
+                    key_of(&path, true),
+                    wasm_bindgen::JsValue::TRUE,
+                )],
+                Change::Gone(path) => vec![
+                    Stored::Delete(key_of(&path, false)),
+                    Stored::Delete(key_of(&path, true)),
+                ],
+            })
+            .collect();
+        if idb::apply(&database, idb::FILES, changes).await.is_err() {
+            log::warn!("a change did not reach the browser's storage");
+        }
+    }
+}
+
+/// Fills the store from IndexedDB, then starts saving changes to it. Everything
+/// under `unsaved` stays in memory only.
+pub async fn hydrate(database: web_sys::IdbDatabase, unsaved: PathBuf) -> Result<()> {
+    let stored = crate::web::idb::all(&database, crate::web::idb::FILES)
+        .await
+        .map_err(Error::other)?;
+    with(|store| {
+        for (key, value) in stored {
+            match key.strip_suffix(FOLDER_MARK) {
+                Some(folder) => {
+                    store.folders.insert(PathBuf::from(folder));
+                }
+                None => {
+                    let bytes = js_sys::Uint8Array::new(&value).to_vec();
+                    store.files.insert(PathBuf::from(key), Rc::new(bytes));
+                }
+            }
+        }
+    });
+    SAVING.with_borrow_mut(|saving| {
+        saving.database = Some(database);
+        saving.unsaved = unsaved;
+    });
+    Ok(())
+}
+
+fn is_database(path: &Path) -> bool {
+    crate::web::sqlite::exists(&path.to_string_lossy())
 }
 
 /// The path with `.` and `..` resolved, the same however it was spelled.
@@ -80,7 +192,9 @@ fn put(path: &Path, bytes: Vec<u8>) -> Result<()> {
         if !store.parent_exists(path) {
             return Err(missing());
         }
-        store.files.insert(path.to_owned(), Rc::new(bytes));
+        let bytes = Rc::new(bytes);
+        store.files.insert(path.to_owned(), bytes.clone());
+        save(Change::File(path.to_owned(), bytes));
         Ok(())
     })
 }
@@ -96,8 +210,8 @@ pub fn create_dir_all(path: impl AsRef<Path>) -> Result<()> {
             if store.files.contains_key(folder) {
                 return Err(Error::new(ErrorKind::NotADirectory, "a file is in the way"));
             }
-            if folder != Path::new("/") {
-                store.folders.insert(folder.to_owned());
+            if folder != Path::new("/") && store.folders.insert(folder.to_owned()) {
+                save(Change::Folder(folder.to_owned()));
             }
         }
         Ok(())
@@ -113,14 +227,20 @@ pub fn create_dir(path: impl AsRef<Path>) -> Result<()> {
         if !store.parent_exists(&path) {
             return Err(missing());
         }
-        store.folders.insert(path);
+        store.folders.insert(path.clone());
+        save(Change::Folder(path));
         Ok(())
     })
 }
 
 pub fn remove_file(path: impl AsRef<Path>) -> Result<()> {
     let path = clean(path.as_ref());
-    with(|store| store.files.remove(&path).map(|_| ())).ok_or_else(missing)
+    if is_database(&path) {
+        return crate::web::sqlite::delete(&path.to_string_lossy());
+    }
+    with(|store| store.files.remove(&path).map(|_| ())).ok_or_else(missing)?;
+    save(Change::Gone(path));
+    Ok(())
 }
 
 pub fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
@@ -132,23 +252,38 @@ pub fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
         let (files, folders) = store.beneath(&path);
         for file in files {
             store.files.remove(&file);
+            save(Change::Gone(file));
         }
         for folder in folders {
             store.folders.remove(&folder);
+            save(Change::Gone(folder));
         }
         store.folders.remove(&path);
+        save(Change::Gone(path.clone()));
         Ok(())
-    })
+    })?;
+    for database in crate::web::sqlite::beneath(&path) {
+        crate::web::sqlite::delete(&database)?;
+    }
+    Ok(())
 }
 
 pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
     let (from, to) = (clean(from.as_ref()), clean(to.as_ref()));
+    if is_database(&from) {
+        return Err(Error::new(
+            ErrorKind::Unsupported,
+            "a database cannot be moved in a page",
+        ));
+    }
     with(|store| {
         if !store.parent_exists(&to) {
             return Err(missing());
         }
         if let Some(bytes) = store.files.remove(&from) {
-            store.files.insert(to, bytes);
+            store.files.insert(to.clone(), bytes.clone());
+            save(Change::Gone(from));
+            save(Change::File(to, bytes));
             return Ok(());
         }
         if !store.folders.contains(&from) {
@@ -157,17 +292,23 @@ pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
         let (files, folders) = store.beneath(&from);
         for file in files {
             if let (Some(bytes), Ok(rest)) = (store.files.remove(&file), file.strip_prefix(&from)) {
-                store.files.insert(to.join(rest), bytes);
+                store.files.insert(to.join(rest), bytes.clone());
+                save(Change::File(to.join(rest), bytes));
             }
+            save(Change::Gone(file));
         }
         for folder in folders {
             store.folders.remove(&folder);
             if let Ok(rest) = folder.strip_prefix(&from) {
                 store.folders.insert(to.join(rest));
+                save(Change::Folder(to.join(rest)));
             }
+            save(Change::Gone(folder));
         }
         store.folders.remove(&from);
-        store.folders.insert(to);
+        save(Change::Gone(from));
+        store.folders.insert(to.clone());
+        save(Change::Folder(to));
         Ok(())
     })
 }
@@ -260,6 +401,13 @@ impl Metadata {
 
 pub fn metadata(path: impl AsRef<Path>) -> Result<Metadata> {
     let path = clean(path.as_ref());
+    // SQLite's store does not say how long a database is; nothing here asks.
+    if is_database(&path) {
+        return Ok(Metadata {
+            length: 1,
+            folder: false,
+        });
+    }
     with(|store| {
         if store.is_folder(&path) {
             return Ok(Metadata {
