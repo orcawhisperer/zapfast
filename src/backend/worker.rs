@@ -13235,6 +13235,18 @@ fn last_avatar(path: &Path) -> Option<PathBuf> {
 }
 
 async fn download_avatar(url: String, path: PathBuf) -> Result<PathBuf, String> {
+    #[cfg(target_arch = "wasm32")]
+    let bytes = {
+        let response =
+            crate::web::http::execute(&whatsapp_rust::wacore::net::HttpRequest::get(url))
+                .await
+                .map_err(|error| error.to_string())?;
+        if !(200..300).contains(&response.status_code) {
+            return Err(format!("http status: {}", response.status_code));
+        }
+        response.body
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let bytes = crate::platform::spawn_blocking(move || {
         crate::proxy::agent()
             .get(&url)

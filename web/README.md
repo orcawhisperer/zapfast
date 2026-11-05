@@ -54,8 +54,9 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 - **Colour emoji.** They draw in egui's monochrome font, and some have no glyph.
 - **Video and voice.** The H.264 and Opus stand-ins always refuse. They need
   WebCodecs.
-- **Avatars, GIF search, and sticker packs.** They still use the blocking client,
-  which always fails in a page, rather than fetch.
+- **GIF search and Signal sticker packs.** They still use the blocking client,
+  which always fails in a page, rather than fetch. Signal's servers also refuse
+  requests from a page.
 - **Background work.** The app shares the page's one thread, so decoding and a
   history sync hold up drawing.
 - **Exporting a chat, and setting aside an unreadable archive.** Both need a second
