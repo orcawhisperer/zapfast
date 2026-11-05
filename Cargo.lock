@@ -9067,6 +9067,7 @@ dependencies = [
  "skrifa",
  "sonora",
  "sonora-aec3",
+ "sqlite-wasm-rs",
  "symphonia",
  "tempfile",
  "tokio",

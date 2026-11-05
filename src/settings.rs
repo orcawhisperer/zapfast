@@ -709,12 +709,20 @@ impl Settings {
     /// Waits for the disk, so never on the thread that draws the window:
     /// there, [`Self::save_to`].
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        fastframe_file::write(path, self.contents()?)
+        crate::platform::file::write(path, self.contents()?)
     }
 
     /// Hands the settings file to `files`, which replaces it off this thread.
-    pub fn save_to(&self, files: &fastframe_file::Writer, path: &Path) -> std::io::Result<()> {
-        files.write(path, self.contents()?, fastframe_file::Access::Default);
+    pub fn save_to(
+        &self,
+        files: &crate::platform::file::Writer,
+        path: &Path,
+    ) -> std::io::Result<()> {
+        files.write(
+            path,
+            self.contents()?,
+            crate::platform::file::Access::Default,
+        );
         Ok(())
     }
 
@@ -892,13 +900,17 @@ impl AccountSettings {
     /// window's thread is running (the first account's migration).
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let contents = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        fastframe_file::write(path, contents)
+        crate::platform::file::write(path, contents)
     }
 
     /// Hands the file to `files`, which replaces it off this thread.
-    pub fn save_to(&self, files: &fastframe_file::Writer, path: &Path) -> std::io::Result<()> {
+    pub fn save_to(
+        &self,
+        files: &crate::platform::file::Writer,
+        path: &Path,
+    ) -> std::io::Result<()> {
         let contents = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        files.write(path, contents, fastframe_file::Access::Default);
+        files.write(path, contents, crate::platform::file::Access::Default);
         Ok(())
     }
 }
@@ -952,9 +964,13 @@ impl AccountRoster {
     }
 
     /// Hands the file to `files`, which replaces it off this thread.
-    pub fn save_to(&self, files: &fastframe_file::Writer, path: &Path) -> std::io::Result<()> {
+    pub fn save_to(
+        &self,
+        files: &crate::platform::file::Writer,
+        path: &Path,
+    ) -> std::io::Result<()> {
         let contents = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        files.write(path, contents, fastframe_file::Access::Default);
+        files.write(path, contents, crate::platform::file::Access::Default);
         Ok(())
     }
 
@@ -1326,7 +1342,7 @@ mod tests {
     #[test]
     fn saves_through_the_writer_land_after_a_flush() {
         let dir = tempfile::tempdir().unwrap();
-        let files = fastframe_file::Writer::new();
+        let files = crate::platform::file::Writer::new();
         let settings = Settings {
             theme: ThemeChoice::Messages,
             check_for_updates: false,

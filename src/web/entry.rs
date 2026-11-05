@@ -15,6 +15,7 @@ const CANVAS: &str = "zapfast";
 /// Runs the app until the page goes away.
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    crate::web::runtime::install_clocks();
     wasm_bindgen_futures::spawn_local(async {
         if let Err(error) = run().await {
             log::error!("ZapFast could not start: {error}");
@@ -38,6 +39,7 @@ fn wants_demo() -> bool {
 
 fn make_app(ctx: &egui::Context, waker: &fastframe_shell::Waker) -> Result<App, String> {
     let dirs = AppDirs::under(std::path::Path::new(ROOT));
+    dirs.ensure().map_err(|error| error.to_string())?;
     let settings = Settings::load(&dirs.settings_file());
     #[cfg(feature = "demo")]
     if wants_demo() {

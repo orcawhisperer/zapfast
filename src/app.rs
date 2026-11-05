@@ -454,7 +454,7 @@ pub struct App {
     pub settings: Settings,
     /// Writes settings and the account roster on a thread of its own, so
     /// a save never stalls the window; flushed at exit and before a suspend.
-    pub files: fastframe_file::Writer,
+    pub files: crate::platform::file::Writer,
     /// Reads through the current window's native clipboard when available.
     clipboard_reader: ClipboardReader,
     /// Resolved interface language, from the setting or the system locale.
@@ -1549,7 +1549,7 @@ impl App {
             locale,
             settings_dirty: false,
             last_settings_save: Instant::now(),
-            files: fastframe_file::Writer::new(),
+            files: crate::platform::file::Writer::new(),
             clipboard_reader: ClipboardReader::default(),
             roster,
             accounts,
@@ -11809,7 +11809,7 @@ impl App {
         for account in &mut self.accounts {
             account.backend.shutdown();
         }
-        self.files.flush(fastframe_file::FLUSH_TIMEOUT);
+        self.files.flush(crate::platform::file::FLUSH_TIMEOUT);
     }
 
     /// Stores the open chat's unsent text, which otherwise only moves into
@@ -15798,7 +15798,7 @@ mod tests {
         let (release, gate) = std::sync::mpsc::channel::<()>();
         let gate = std::sync::Mutex::new(gate);
         let (written, writes) = std::sync::mpsc::channel();
-        app.files = fastframe_file::Writer::with_write(move |path, contents, access| {
+        app.files = crate::platform::file::Writer::with_write(move |path, contents, access| {
             gate.lock().unwrap().recv().unwrap();
             written
                 .send((path.to_owned(), contents.to_vec(), access))
@@ -15812,7 +15812,7 @@ mod tests {
         assert!(app.files.flush(Duration::from_secs(10)));
         let (path, contents, access) = writes.try_recv().expect("written after the flush");
         assert_eq!(path, app.dirs.settings_file());
-        assert_eq!(access, fastframe_file::Access::Default);
+        assert_eq!(access, crate::platform::file::Access::Default);
         let saved: serde_json::Value = serde_json::from_slice(&contents).unwrap();
         assert_eq!(saved["check_for_updates"], false);
     }

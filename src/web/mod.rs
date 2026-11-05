@@ -3,8 +3,10 @@
 //! sees it.
 
 mod entry;
+pub mod file;
 pub mod http;
 pub mod images;
+pub mod keys;
 pub mod open;
 pub mod rfd;
 pub mod runtime;

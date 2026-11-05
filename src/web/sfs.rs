@@ -531,3 +531,9 @@ impl whatsapp_rust::wacore::download::DownloadWriter for File {
         self.set_len(len)
     }
 }
+
+/// The path as the store files it, once it is known to exist.
+pub fn canonicalize(path: impl AsRef<Path>) -> Result<PathBuf> {
+    metadata(path.as_ref())?;
+    Ok(clean(path.as_ref()))
+}

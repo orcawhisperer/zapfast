@@ -27,18 +27,22 @@ Then open <http://localhost:8000/?demo> for the sample chats.
 
 ## What works
 
-The interface with the sample chats: drawing, clicks, navigation, typing.
+- The interface with the sample chats: drawing, clicks, navigation, typing.
+- Without `?demo`, the socket to WhatsApp, the handshake, and the pairing QR code.
+  Linking itself has not been tried with a phone.
 
 ## What does not work yet
 
-- **A real account.** The app does not start without `?demo`. Settings saving,
-  encrypted storage, and linking come next.
-- **Keeping anything.** Files live in memory and are gone when the page closes.
+- **Keeping anything.** Settings, the session, and the archive live in memory and
+  are gone when the page closes, so a linked device stays listed on the phone
+  with nothing behind it. Do not link an account you care about yet.
 - **Colour emoji.** They draw in egui's monochrome font, and some have no glyph.
 - **Video and voice.** The H.264 and Opus stand-ins always refuse. They need
   WebCodecs.
-- **Background work.** The app shares the page's one thread, so decoding holds up
-  drawing.
+- **Downloads and avatars.** Several still use the blocking client, which always
+  fails in a page, rather than fetch.
+- **Background work.** The app shares the page's one thread, so decoding and a
+  history sync hold up drawing.
 - **Attachments, notifications, the clipboard for pictures, cameras, calls, and
   installing as an app.**
 

@@ -352,7 +352,7 @@ pub fn import(source: &Path, state: &Path) -> Result<PathBuf, String> {
         (bytes, extension)
     };
     let target = state.join(format!("wallpaper.{extension}"));
-    fastframe_file::write(&target, contents).map_err(|error| error.to_string())?;
+    crate::platform::file::write(&target, contents).map_err(|error| error.to_string())?;
     for other in EXTENSIONS.into_iter().filter(|other| *other != extension) {
         let _ = crate::platform::sfs::remove_file(state.join(format!("wallpaper.{other}")));
     }

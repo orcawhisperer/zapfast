@@ -5,6 +5,35 @@ use std::pin::Pin;
 use std::time::Duration;
 
 use whatsapp_rust::wacore::runtime::{AbortHandle, Runtime};
+use whatsapp_rust::wacore::time;
+
+/// The protocol's clocks. The library has no way to read the time in a page and
+/// would otherwise count from 1970, which WhatsApp would see in its timestamps.
+struct WallClock;
+
+impl time::TimeProvider for WallClock {
+    fn now_millis(&self) -> i64 {
+        js_sys::Date::now() as i64
+    }
+}
+
+struct SteadyClock;
+
+impl time::MonotonicProvider for SteadyClock {
+    fn now_nanos(&self) -> u64 {
+        static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+        START
+            .get_or_init(web_time::Instant::now)
+            .elapsed()
+            .as_nanos() as u64
+    }
+}
+
+/// Sets the clocks once, before anything reads them.
+pub fn install_clocks() {
+    let _ = time::set_time_provider(WallClock);
+    let _ = time::set_monotonic_provider(SteadyClock);
+}
 
 /// Spawns on the page's microtask queue and sleeps with `setTimeout`.
 pub struct WebRuntime;

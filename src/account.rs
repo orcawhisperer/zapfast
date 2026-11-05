@@ -368,7 +368,7 @@ impl Account {
     }
 
     /// Hands the account's settings to the app's file writer.
-    pub fn save_settings(&mut self, files: &fastframe_file::Writer) {
+    pub fn save_settings(&mut self, files: &crate::platform::file::Writer) {
         self.settings_dirty = false;
         if let Err(error) = self.settings.save_to(files, &self.dirs.settings_file()) {
             log::warn!("could not save account settings: {error}");

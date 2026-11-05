@@ -3,6 +3,14 @@
 
 #[cfg(target_arch = "wasm32")]
 pub use crate::web::sfs;
+pub mod file {
+    #[cfg(not(target_arch = "wasm32"))]
+    pub use fastframe_file::*;
+
+    #[cfg(target_arch = "wasm32")]
+    pub use crate::web::file::*;
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use open;
 #[cfg(not(target_arch = "wasm32"))]
@@ -14,6 +22,7 @@ pub trait FilePath {
     fn found_file(&self) -> bool;
     fn found_folder(&self) -> bool;
     fn checked_found(&self) -> std::io::Result<bool>;
+    fn resolved(&self) -> std::io::Result<std::path::PathBuf>;
 }
 
 impl FilePath for std::path::Path {
@@ -37,6 +46,11 @@ impl FilePath for std::path::Path {
         self.try_exists()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolved(&self) -> std::io::Result<std::path::PathBuf> {
+        self.canonicalize()
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn found(&self) -> bool {
         sfs::metadata(self).is_ok()
@@ -55,6 +69,11 @@ impl FilePath for std::path::Path {
     #[cfg(target_arch = "wasm32")]
     fn checked_found(&self) -> std::io::Result<bool> {
         Ok(self.found())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn resolved(&self) -> std::io::Result<std::path::PathBuf> {
+        sfs::canonicalize(self)
     }
 }
 #[cfg(not(target_arch = "wasm32"))]

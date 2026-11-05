@@ -172,10 +172,10 @@ impl Worker {
                 let parent = target
                     .parent()
                     .context("Choose an export folder")?
-                    .canonicalize()?;
+                    .resolved()?;
                 for root in &roots {
                     let root = root.parent().and_then(Path::parent).unwrap_or(root);
-                    if let Ok(root) = root.canonicalize() {
+                    if let Ok(root) = root.resolved() {
                         anyhow::ensure!(
                             !parent.starts_with(root),
                             "Choose a folder outside ZapFast's application data"

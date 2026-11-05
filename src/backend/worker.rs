@@ -2121,11 +2121,11 @@ impl Worker {
     /// app's own media cache is touched; anything the user saved elsewhere
     /// stays where it is.
     fn drop_cached_media(&self, paths: &[std::path::PathBuf]) {
-        let Ok(cache) = self.dirs.media_cache_dir().canonicalize() else {
+        let Ok(cache) = self.dirs.media_cache_dir().resolved() else {
             return;
         };
         for path in paths {
-            let Ok(path) = path.canonicalize() else {
+            let Ok(path) = path.resolved() else {
                 continue;
             };
             if !path.starts_with(&cache) {

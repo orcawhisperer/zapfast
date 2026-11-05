@@ -30,12 +30,19 @@ fn plaintext(path: &Path) -> Result<bool> {
 pub(super) fn key_for(path: &Path) -> Result<Zeroizing<[u8; 32]>> {
     let parent = path.parent().context("Archive has no parent directory")?;
     fs::create_dir_all(parent)?;
-    let store = platform_store()?;
-    let entry = store
-        .build("rocks.zapfast.ZapFast", &identity_for(parent)?, None)
-        .map_err(keyring_error)
-        .context("The OS keyring could not open ZapFast's archive key")?;
-    key_from_entry(path, &entry)
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::web::keys::key_for(&identity_for(parent)?)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let store = platform_store()?;
+        let entry = store
+            .build("rocks.zapfast.ZapFast", &identity_for(parent)?, None)
+            .map_err(keyring_error)
+            .context("The OS keyring could not open ZapFast's archive key")?;
+        key_from_entry(path, &entry)
+    }
 }
 
 /// Copies the keyring entry when an archive moves to another folder.
@@ -61,7 +68,7 @@ fn copy_archive_key_in(
         return Ok(());
     }
     fs::create_dir_all(new_parent)?;
-    if old_parent.canonicalize()? == new_parent.canonicalize()? {
+    if old_parent.resolved()? == new_parent.resolved()? {
         return Ok(());
     }
     let old_entry = store
@@ -114,6 +121,8 @@ fn copy_archive_key_in(
 /// Deletes the keyring entry of an archive folder that is gone for good,
 /// such as a removed account's. Never call it while the archive exists.
 pub fn forget_archive_key(identity: &str) -> Result<()> {
+    #[cfg(target_arch = "wasm32")]
+    crate::web::keys::forget(identity);
     let entry = platform_store()?
         .build("rocks.zapfast.ZapFast", identity, None)
         .map_err(keyring_error)?;
@@ -131,7 +140,7 @@ pub fn archive_key_identity(path: &Path) -> Result<String> {
 fn identity_for(parent: &Path) -> Result<String> {
     // Separate profiles must not overwrite each other's keys. The credential
     // label contains a digest, never a user path, phone number or message data.
-    let digest = Sha256::digest(parent.canonicalize()?.as_os_str().as_encoded_bytes());
+    let digest = Sha256::digest(parent.resolved()?.as_os_str().as_encoded_bytes());
     Ok(format!(
         "archive-{}",
         digest
@@ -258,9 +267,23 @@ pub(super) fn read_only(path: &Path, key: &[u8; 32]) -> Result<Connection> {
 
 /// Applies the supplied SQLCipher key and verifies a page before allowing archive access.
 fn unlock(connection: Connection, key: &[u8; 32]) -> Result<Connection> {
+    // SQLite3 Multiple Ciphers in a page, whose key takes hex by another name.
+    #[cfg(target_arch = "wasm32")]
+    connection.pragma_update(
+        None,
+        "hexkey",
+        key_literal(key)
+            .trim_start_matches("x'")
+            .trim_end_matches('\''),
+    )?;
+    #[cfg(not(target_arch = "wasm32"))]
     connection.pragma_update(None, "key", &*key_literal(key))?;
+    #[cfg(target_arch = "wasm32")]
+    let version_query = "SELECT sqlite3mc_version()";
+    #[cfg(not(target_arch = "wasm32"))]
+    let version_query = "PRAGMA cipher_version";
     let version: String = connection
-        .query_row("PRAGMA cipher_version", [], |row| row.get(0))
+        .query_row(version_query, [], |row| row.get(0))
         .context("This build does not support encrypted archives")?;
     ensure!(
         !version.is_empty(),
@@ -292,6 +315,16 @@ pub(super) fn open(path: &Path, key: &[u8; 32]) -> Result<Connection> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
+    // A page's archive was encrypted from its first byte, and lives in SQLite's
+    // own storage, out of reach of the file checks below.
+    #[cfg(target_arch = "wasm32")]
+    return keyed(path, key);
+    #[cfg(not(target_arch = "wasm32"))]
+    open_on_disk(path, key)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn open_on_disk(path: &Path, key: &[u8; 32]) -> Result<Connection> {
     let staging = path.with_extension("db.encrypting");
     if !path.found() {
         private_file(path)?;
