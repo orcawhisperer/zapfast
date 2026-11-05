@@ -745,6 +745,9 @@ async fn played_receipt_allowed(
 }
 
 /// A sticker file's size and modification time, with the emojis read from it.
+/// How many failed lookups a profile picture gets before it stops being asked for.
+const AVATAR_ATTEMPTS: u32 = 3;
+
 type EmojiStamp = ((u64, Option<std::time::SystemTime>), Vec<String>);
 
 /// Downloadable recent sticker from the phone.
@@ -1049,6 +1052,7 @@ pub async fn run(
         pending_older: HashMap::new(),
         older_warned: HashSet::new(),
         pending_avatars: HashMap::new(),
+        avatar_failures: HashMap::new(),
         channel_pictures: Default::default(),
         sticker_fetches: HashSet::new(),
         sticker_downloads: HashSet::new(),
@@ -1610,6 +1614,9 @@ struct Worker {
     older_warned: HashSet<ChatId>,
     /// Deferred profile-picture requests and retry counts.
     pending_avatars: HashMap<(String, bool), u32>,
+    /// Failures of the avatars being asked for again, kept while they are out
+    /// of `pending_avatars` so that retries add up.
+    avatar_failures: HashMap<(String, bool), u32>,
     /// Followed channels' pictures, which no profile-picture lookup finds.
     channel_pictures: channel_pictures::ChannelPictures,
     /// Active recent-sticker downloads by hash.
@@ -8973,11 +8980,10 @@ impl Worker {
                 });
             }
             Command::AvatarFetched { id, full, path } => {
+                self.avatar_failures.remove(&(id.clone(), full));
                 self.emit(Event::Avatar { id, full, path })
             }
-            Command::AvatarFailed { id, full } => {
-                *self.pending_avatars.entry((id, full)).or_insert(0) += 1;
-            }
+            Command::AvatarFailed { id, full } => self.avatar_failed(id, full),
             Command::LearnNumbers(numbers) => {
                 for (lid, pn) in numbers {
                     self.learn_lid(&lid, &pn);
@@ -10850,19 +10856,34 @@ impl Worker {
         {
             return;
         }
+        self.retry_due_avatars();
+    }
+
+    /// Asks again for each waiting picture, and gives up on one that has failed
+    /// too often, so a blocked or rate-limited lookup does not repeat forever.
+    fn retry_due_avatars(&mut self) {
         let due: Vec<(String, bool)> = self.pending_avatars.keys().cloned().collect();
         for (id, full) in due {
             let attempts = self
                 .pending_avatars
                 .remove(&(id.clone(), full))
                 .unwrap_or(0);
-            if attempts >= 3 {
+            if attempts >= AVATAR_ATTEMPTS {
+                self.avatar_failures.remove(&(id.clone(), full));
                 let path = last_avatar(&self.avatar_file(&id, full));
                 self.emit(Event::Avatar { id, full, path });
                 continue;
             }
+            self.avatar_failures.insert((id.clone(), full), attempts);
             self.fetch_avatar(id, full);
         }
+    }
+
+    /// Files a failed picture for another try, counting the failures before it.
+    fn avatar_failed(&mut self, id: String, full: bool) {
+        let key = (id, full);
+        let failures = self.avatar_failures.remove(&key).unwrap_or(0) + 1;
+        self.pending_avatars.insert(key, failures);
     }
 
     /// How many in-chat matches the pane lists. One more is asked for, so a
@@ -20146,6 +20167,7 @@ mod receipt_tests {
             pending_older: HashMap::new(),
             older_warned: HashSet::new(),
             pending_avatars: HashMap::new(),
+            avatar_failures: HashMap::new(),
             channel_pictures: Default::default(),
             sticker_fetches: HashSet::new(),
             sticker_downloads: HashSet::new(),

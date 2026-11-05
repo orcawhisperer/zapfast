@@ -165,6 +165,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_picture_that_keeps_failing_stops_being_asked_for() {
+        let (mut worker, events, _, _) = super::super::receipt_tests::worker();
+        let person = "491700000000@s.whatsapp.net".to_owned();
+        let key = (person.clone(), false);
+        for failures in 1..=super::super::AVATAR_ATTEMPTS {
+            worker.avatar_failed(person.clone(), false);
+            assert_eq!(worker.pending_avatars.get(&key), Some(&failures));
+            worker.retry_due_avatars();
+        }
+        assert!(
+            !worker.pending_avatars.contains_key(&key),
+            "the third failure is the last"
+        );
+        assert!(!worker.avatar_failures.contains_key(&key));
+        assert!(
+            std::iter::from_fn(|| events.try_recv().ok())
+                .any(|event| matches!(event, Event::Avatar { id, .. } if id == person)),
+            "the window hears that no picture is coming"
+        );
+    }
+
+    #[tokio::test]
     async fn a_picture_waits_for_the_connection_and_the_channel_list() {
         let (mut worker, events, _, _) = super::super::receipt_tests::worker();
         worker.fetch_avatar(CHANNEL.into(), false);
