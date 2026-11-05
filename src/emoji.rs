@@ -15,8 +15,12 @@ use egui::{Pos2, Rect, TextFormat};
 
 pub use fastframe_emoji::{PLACEHOLDER, only_emoji};
 
-/// Noto Color Emoji, behind the platform's font.
+/// Noto Color Emoji, behind the platform's font. A page gets every emoji from the
+/// browser, and leaves these megabytes out of its download.
+#[cfg(not(target_arch = "wasm32"))]
 const BUNDLED: &[u8] = include_bytes!("../assets/fonts/NotoColorEmoji.ttf");
+#[cfg(target_arch = "wasm32")]
+const BUNDLED: &[u8] = &[];
 
 fn setup() {
     static ONCE: std::sync::Once = std::sync::Once::new();

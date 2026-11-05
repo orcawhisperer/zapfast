@@ -13,6 +13,9 @@ for arg in "$@"; do
     esac
 done
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/wasm}"
+# wasm-bindgen reads the whole module into memory several times over, and debug
+# information is most of a development build. Function names stay for stack traces.
+export CARGO_PROFILE_DEV_STRIP=debuginfo
 cargo build --target wasm32-unknown-unknown --profile "$profile" \
     --bin zapfast-web --features "$features"
 folder=$profile

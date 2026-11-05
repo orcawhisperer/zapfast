@@ -8314,6 +8314,10 @@ name = "web-shim-fastframe-emoji"
 version = "0.15.4"
 dependencies = [
  "egui",
+ "js-sys",
+ "unicode-segmentation",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

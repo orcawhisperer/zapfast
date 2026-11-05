@@ -4,7 +4,11 @@ version = "0.15.4"
 edition = "2024"
 license = "MIT"
 publish = false
-description = "Plain text in place of fastframe-emoji's pictures: the real crate's clock panics in a page."
+description = "Colour emoji drawn by the browser: fastframe-emoji's clock panics in a page, and a page has the platform's emoji font a canvas away."
 
 [dependencies]
 egui = "0.36.2"
+js-sys = "0.3"
+unicode-segmentation = "1"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["CanvasRenderingContext2d", "Document", "Element", "HtmlCanvasElement", "ImageData", "Window"] }

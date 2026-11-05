@@ -30,8 +30,8 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 ## What works
 
 - The interface with the sample chats: drawing, clicks, navigation, typing.
-- Without `?demo`, the socket to WhatsApp, the handshake, and the pairing QR code.
-  Linking itself has not been tried with a phone.
+- Without `?demo`, a real account: linking by QR code, syncing chats, sending and
+  receiving messages, and staying linked across a reload.
 - Storage that survives a reload, kept to one tab at a time. The archive and the
   device store are encrypted. Each has a random key, wrapped by a master key the
   browser holds as non-extractable.
@@ -51,7 +51,8 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 
 ## What does not work yet
 
-- **Colour emoji.** They draw in egui's monochrome font, and some have no glyph.
+- **Colour emoji in plain labels.** Messages and chat names have them, drawn by the
+  browser. Menus and tooltips keep the fonts' monochrome glyphs.
 - **Video and voice.** The H.264 and Opus stand-ins always refuse. They need
   WebCodecs.
 - **GIF search and Signal sticker packs.** They still use the blocking client,
