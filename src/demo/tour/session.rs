@@ -105,7 +105,7 @@ pub fn respond(app: &mut App) {
                 append(app, row);
             }
             Command::InspectPicture { target, path } => {
-                let size = std::fs::read(&path)
+                let size = crate::platform::sfs::read(&path)
                     .map_err(|error| error.to_string())
                     .and_then(|bytes| crate::backend::picture_edit::inspect(&bytes));
                 match size {
@@ -272,7 +272,7 @@ pub fn respond(app: &mut App) {
                 let Ok(bytes) = crate::voice::encode(&samples) else {
                     continue;
                 };
-                if std::fs::write(&path, &bytes).is_err() {
+                if crate::platform::sfs::write(&path, &bytes).is_err() {
                     continue;
                 }
                 let mut media =
@@ -319,7 +319,7 @@ pub fn respond(app: &mut App) {
             Command::SetCallCamera(on) => update_call(app, |call| call.camera_on = on),
             Command::AnswerCall => update_call(app, |call| {
                 call.phase = crate::calls::CallPhase::Active;
-                call.started = Some(std::time::Instant::now());
+                call.started = Some(crate::platform::Instant::now());
                 call.remote_video = call.video;
                 call.camera_on = call.video;
             }),

@@ -1,5 +1,18 @@
 //! ZapFast internals exposed for diagnostics and tests.
 
+// In a browser, crates that cannot build there are replaced under their own
+// names, so the code that uses them is the same on every platform.
+#[cfg(target_arch = "wasm32")]
+extern crate web_shim_fastframe_emoji as fastframe_emoji;
+#[cfg(target_arch = "wasm32")]
+extern crate web_shim_fastframe_shell as fastframe_shell;
+#[cfg(target_arch = "wasm32")]
+extern crate web_shim_openh264 as openh264;
+#[cfg(target_arch = "wasm32")]
+extern crate web_shim_opus as opus;
+#[cfg(target_arch = "wasm32")]
+extern crate web_shim_ureq as ureq;
+
 pub mod a11y;
 pub mod account;
 pub mod animation;
@@ -42,6 +55,7 @@ pub mod new_group;
 pub mod notify;
 pub mod opener;
 pub mod paths;
+pub mod platform;
 pub mod privacy;
 pub mod proxy;
 pub mod qr;
@@ -54,6 +68,7 @@ pub mod target;
 pub mod theme;
 pub mod timestretch;
 pub mod transcript;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod transport;
 pub mod ui;
 pub mod updates;
@@ -62,3 +77,5 @@ pub mod video;
 pub mod video_rate;
 pub mod voice;
 pub mod wallpaper;
+#[cfg(target_arch = "wasm32")]
+pub mod web;

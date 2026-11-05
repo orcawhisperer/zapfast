@@ -25,7 +25,8 @@
 //!   away? Request a reconnect on the first check, even if buffered traffic
 //!   keeps the received-frame counter moving.
 
-use std::time::{Duration, Instant, SystemTime};
+use crate::platform::{Instant, SystemTime};
+use std::time::Duration;
 
 /// Wall-clock time that must pass beyond the monotonic clock between two ticks
 /// before the machine counts as having slept. Ticks are five seconds apart; a

@@ -30,6 +30,7 @@
 //! | 34.2 - 39.0 | The Calls page: today's three calls on top of the history        |
 
 use super::{Cue, Gesture, Target, session};
+use crate::platform::Instant;
 use crate::{
     app::App,
     calls::{CallPhase, CallUpdate, GroupCall, Participant},
@@ -37,7 +38,7 @@ use crate::{
     ui::focus::Stop as Control,
 };
 use egui::PointerButton;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Length of the tour, excluding its optional start delay.
 pub const DURATION: Duration = Duration::from_secs(39);

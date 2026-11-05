@@ -1,0 +1,9 @@
+[package]
+name = "web-shim-openh264"
+version = "0.9.3"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Answers 'not available' with the openh264 crate's API: its C++ cannot build for a browser, where video goes through WebCodecs."
+
+[dependencies]

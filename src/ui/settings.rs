@@ -822,7 +822,7 @@ fn sections(app: &App) -> Vec<Section> {
             if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), &open_folder, false)
                 .clicked()
             {
-                let _ = std::fs::create_dir_all(&media);
+                let _ = crate::platform::sfs::create_dir_all(&media);
                 app.actions.push(Action::OpenFolder(media.clone()));
             }
             if theme::soft_button(

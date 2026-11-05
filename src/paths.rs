@@ -3,6 +3,7 @@
 //! Configuration, session state, and caches use separate standard platform
 //! directories. Clearing a cache does not remove device keys.
 
+use crate::platform::FilePath as _;
 use std::path::{Path, PathBuf};
 
 use directories::ProjectDirs;
@@ -56,6 +57,7 @@ impl AppDirs {
             if let Some(old) = Self::of(name) {
                 self.adopt(&old)?;
             }
+            #[cfg(not(target_arch = "wasm32"))]
             if let (Some(from), Some(to)) =
                 (eframe::storage_dir(name), eframe::storage_dir("zapfast"))
             {
@@ -156,10 +158,10 @@ impl AppDirs {
         ];
         let pending: Vec<&str> = DATABASES
             .into_iter()
-            .filter(|name| self.state.join(name).exists())
+            .filter(|name| self.state.join(name).found())
             .collect();
         let dest = self.account(&AccountId::first());
-        if !pending.is_empty() && dest.session_db().exists() {
+        if !pending.is_empty() && dest.session_db().found() {
             log::warn!(
                 "single-account files beside a linked account folder are left alone: an older \
                  ZapFast may still be installed"
@@ -195,9 +197,9 @@ impl AppDirs {
         let mut blocked: Vec<PathBuf> = pending
             .iter()
             .map(|name| dest.state.join(name))
-            .filter(|to| to.exists())
+            .filter(|to| to.found())
             .collect();
-        if self.state.join("stickers").is_dir() && dest.saved_sticker_dir().exists() {
+        if self.state.join("stickers").found_folder() && dest.saved_sticker_dir().found() {
             blocked.push(dest.saved_sticker_dir());
         }
         if !blocked.is_empty() {
@@ -211,7 +213,7 @@ impl AppDirs {
             ));
         }
         let legacy_archive = self.state.join("archive.db");
-        if legacy_archive.exists() {
+        if legacy_archive.found() {
             copy_key(&legacy_archive, &dest.archive_db()).map_err(|error| {
                 std::io::Error::other(format!(
                     "Could not move the archive's key to the new account folder, so the archive was left where it is: {error}"
@@ -219,12 +221,12 @@ impl AppDirs {
             })?;
         }
         for name in pending {
-            std::fs::rename(self.state.join(name), dest.state.join(name))?;
+            crate::platform::sfs::rename(self.state.join(name), dest.state.join(name))?;
         }
         // Make the renames durable before anything opens the databases.
         #[cfg(unix)]
         for dir in [&self.state, &dest.state] {
-            std::fs::File::open(dir)?.sync_all()?;
+            crate::platform::sfs::File::open(dir)?.sync_all()?;
         }
         Ok(())
     }
@@ -288,7 +290,7 @@ impl AppDirs {
 
     pub fn ensure(&self) -> std::io::Result<()> {
         for dir in [&self.config, &self.state, &self.cache] {
-            let mut builder = std::fs::DirBuilder::new();
+            let mut builder = crate::platform::sfs::DirBuilder::new();
             builder.recursive(true);
             // Create new directories privately, even with a permissive umask.
             #[cfg(unix)]
@@ -314,7 +316,7 @@ pub struct AccountDirs {
 impl AccountDirs {
     pub fn ensure(&self) -> std::io::Result<()> {
         for dir in [&self.state, &self.cache] {
-            let mut builder = std::fs::DirBuilder::new();
+            let mut builder = crate::platform::sfs::DirBuilder::new();
             builder.recursive(true);
             #[cfg(unix)]
             {
@@ -372,11 +374,11 @@ impl AccountDirs {
 }
 
 fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    if from.exists() && !to.try_exists()? {
+    if from.found() && !to.checked_found()? {
         if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::platform::sfs::create_dir_all(parent)?;
         }
-        std::fs::rename(from, to)?;
+        crate::platform::sfs::rename(from, to)?;
     }
     Ok(())
 }
@@ -385,7 +387,7 @@ fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
 fn restrict_directory(path: &Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+    crate::platform::sfs::set_permissions(path, crate::platform::sfs::Permissions::from_mode(0o700))
 }
 
 #[cfg(not(unix))]
@@ -418,11 +420,11 @@ fn runtime_dir(project: &ProjectDirs, state: &Path) -> PathBuf {
 /// Rename whole directories so SQLite databases travel with their WAL files.
 /// A failed move stops startup before empty replacement directories are made.
 fn adopt_directory(from: &Path, to: &Path) -> std::io::Result<()> {
-    if from.is_dir() && !to.try_exists()? {
+    if from.found_folder() && !to.checked_found()? {
         if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::platform::sfs::create_dir_all(parent)?;
         }
-        std::fs::rename(from, to)?;
+        crate::platform::sfs::rename(from, to)?;
     }
     Ok(())
 }
@@ -434,8 +436,8 @@ mod tests {
     fn root(name: &str) -> PathBuf {
         let root =
             std::env::temp_dir().join(format!("zapfast-paths-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let _ = crate::platform::sfs::remove_dir_all(&root);
+        crate::platform::sfs::create_dir_all(&root).unwrap();
         root
     }
 
@@ -449,11 +451,15 @@ mod tests {
         dirs.ensure().unwrap();
         for path in [&dirs.config, &dirs.state, &dirs.cache] {
             assert_eq!(
-                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                crate::platform::sfs::metadata(path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
                 0o700
             );
         }
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
@@ -464,30 +470,44 @@ mod tests {
         let root = root("existing-permissions");
         let dirs = AppDirs::under(&root);
         for path in [&dirs.config, &dirs.state, &dirs.cache] {
-            std::fs::create_dir_all(path).unwrap();
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
-            std::fs::write(path.join("fixture"), b"preserved").unwrap();
+            crate::platform::sfs::create_dir_all(path).unwrap();
+            crate::platform::sfs::set_permissions(
+                path,
+                crate::platform::sfs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+            crate::platform::sfs::write(path.join("fixture"), b"preserved").unwrap();
         }
         dirs.ensure().unwrap();
         for path in [&dirs.config, &dirs.state, &dirs.cache] {
             assert_eq!(
-                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                crate::platform::sfs::metadata(path)
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
                 0o700
             );
-            assert_eq!(std::fs::read(path.join("fixture")).unwrap(), b"preserved");
+            assert_eq!(
+                crate::platform::sfs::read(path.join("fixture")).unwrap(),
+                b"preserved"
+            );
         }
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn ensure_stops_when_an_application_directory_cannot_be_created() {
         let root = root("blocked-directory");
         let dirs = AppDirs::under(&root);
-        std::fs::write(&dirs.state, b"existing file").unwrap();
+        crate::platform::sfs::write(&dirs.state, b"existing file").unwrap();
         assert!(dirs.ensure().is_err());
         assert!(!dirs.cache.exists());
-        assert_eq!(std::fs::read(&dirs.state).unwrap(), b"existing file");
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            crate::platform::sfs::read(&dirs.state).unwrap(),
+            b"existing file"
+        );
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -506,8 +526,8 @@ mod tests {
                 old.saved_sticker_dir().join("pack/sticker.webp"),
                 old.media_cache_dir().join("photo.jpg"),
             ] {
-                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-                std::fs::write(path, b"preserved").unwrap();
+                crate::platform::sfs::create_dir_all(path.parent().unwrap()).unwrap();
+                crate::platform::sfs::write(path, b"preserved").unwrap();
             }
             new.adopt(&old).unwrap();
             new.adopt(&old).unwrap(); // A second launch is a no-op.
@@ -520,12 +540,12 @@ mod tests {
                 new.saved_sticker_dir().join("pack/sticker.webp"),
                 new.media_cache_dir().join("photo.jpg"),
             ] {
-                assert_eq!(std::fs::read(path).unwrap(), b"preserved");
+                assert_eq!(crate::platform::sfs::read(path).unwrap(), b"preserved");
             }
             assert!(!old.config.exists());
             assert!(!old.state.exists());
             assert!(!old.cache.exists());
-            std::fs::remove_dir_all(root).unwrap();
+            crate::platform::sfs::remove_dir_all(root).unwrap();
         }
     }
 
@@ -537,24 +557,30 @@ mod tests {
         let oldest = AppDirs::under(&root.join("fastwhatsapp"));
         recent.ensure().unwrap();
         oldest.ensure().unwrap();
-        std::fs::create_dir_all(&new.config).unwrap();
-        std::fs::write(new.settings_file(), b"new settings").unwrap();
-        std::fs::write(recent.settings_file(), b"old settings").unwrap();
-        std::fs::write(recent.archive_db(), b"recent archive").unwrap();
-        std::fs::write(oldest.archive_db(), b"oldest archive").unwrap();
+        crate::platform::sfs::create_dir_all(&new.config).unwrap();
+        crate::platform::sfs::write(new.settings_file(), b"new settings").unwrap();
+        crate::platform::sfs::write(recent.settings_file(), b"old settings").unwrap();
+        crate::platform::sfs::write(recent.archive_db(), b"recent archive").unwrap();
+        crate::platform::sfs::write(oldest.archive_db(), b"oldest archive").unwrap();
         new.adopt(&recent).unwrap();
         new.adopt(&oldest).unwrap();
-        assert_eq!(std::fs::read(new.settings_file()).unwrap(), b"new settings");
         assert_eq!(
-            std::fs::read(recent.settings_file()).unwrap(),
+            crate::platform::sfs::read(new.settings_file()).unwrap(),
+            b"new settings"
+        );
+        assert_eq!(
+            crate::platform::sfs::read(recent.settings_file()).unwrap(),
             b"old settings"
         );
-        assert_eq!(std::fs::read(new.archive_db()).unwrap(), b"recent archive");
         assert_eq!(
-            std::fs::read(oldest.archive_db()).unwrap(),
+            crate::platform::sfs::read(new.archive_db()).unwrap(),
+            b"recent archive"
+        );
+        assert_eq!(
+            crate::platform::sfs::read(oldest.archive_db()).unwrap(),
             b"oldest archive"
         );
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -573,10 +599,13 @@ mod tests {
             runtime: root.join("new/run"),
         };
         old.ensure().unwrap();
-        std::fs::write(old.session_db(), b"session").unwrap();
+        crate::platform::sfs::write(old.session_db(), b"session").unwrap();
         new.adopt(&old).unwrap();
-        assert_eq!(std::fs::read(new.session_db()).unwrap(), b"session");
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            crate::platform::sfs::read(new.session_db()).unwrap(),
+            b"session"
+        );
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -585,14 +614,20 @@ mod tests {
         let old = AppDirs::under(&root.join("old"));
         let new = AppDirs::under(&root.join("blocked/new"));
         old.ensure().unwrap();
-        std::fs::write(old.session_db(), b"session").unwrap();
-        std::fs::write(root.join("blocked"), b"not a directory").unwrap();
+        crate::platform::sfs::write(old.session_db(), b"session").unwrap();
+        crate::platform::sfs::write(root.join("blocked"), b"not a directory").unwrap();
         assert!(new.adopt(&old).is_err());
-        assert_eq!(std::fs::read(old.session_db()).unwrap(), b"session");
-        std::fs::remove_file(root.join("blocked")).unwrap();
+        assert_eq!(
+            crate::platform::sfs::read(old.session_db()).unwrap(),
+            b"session"
+        );
+        crate::platform::sfs::remove_file(root.join("blocked")).unwrap();
         new.adopt(&old).unwrap();
-        assert_eq!(std::fs::read(new.session_db()).unwrap(), b"session");
-        std::fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            crate::platform::sfs::read(new.session_db()).unwrap(),
+            b"session"
+        );
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -600,30 +635,33 @@ mod tests {
         let root = root("single-account");
         let dirs = AppDirs::under(&root);
         dirs.ensure().unwrap();
-        std::fs::write(dirs.session_db(), b"session").unwrap();
-        std::fs::write(dirs.archive_db(), b"SQLite format 3\0").unwrap();
-        std::fs::create_dir_all(dirs.media_cache_dir()).unwrap();
-        std::fs::write(dirs.media_cache_dir().join("photo.jpg"), b"photo").unwrap();
-        std::fs::write(dirs.state.join("wallpaper.png"), b"wall").unwrap();
+        crate::platform::sfs::write(dirs.session_db(), b"session").unwrap();
+        crate::platform::sfs::write(dirs.archive_db(), b"SQLite format 3\0").unwrap();
+        crate::platform::sfs::create_dir_all(dirs.media_cache_dir()).unwrap();
+        crate::platform::sfs::write(dirs.media_cache_dir().join("photo.jpg"), b"photo").unwrap();
+        crate::platform::sfs::write(dirs.state.join("wallpaper.png"), b"wall").unwrap();
         dirs.adopt_single_account().unwrap();
         let account = dirs.account(&AccountId::first());
-        assert_eq!(std::fs::read(account.session_db()).unwrap(), b"session");
         assert_eq!(
-            std::fs::read(account.archive_db()).unwrap(),
+            crate::platform::sfs::read(account.session_db()).unwrap(),
+            b"session"
+        );
+        assert_eq!(
+            crate::platform::sfs::read(account.archive_db()).unwrap(),
             b"SQLite format 3\0"
         );
         assert_eq!(
-            std::fs::read(account.media_cache_dir().join("photo.jpg")).unwrap(),
+            crate::platform::sfs::read(account.media_cache_dir().join("photo.jpg")).unwrap(),
             b"photo"
         );
         assert!(!dirs.session_db().exists());
         assert!(!dirs.archive_db().exists());
         assert_eq!(
-            std::fs::read(account.wallpaper_file("png")).unwrap(),
+            crate::platform::sfs::read(account.wallpaper_file("png")).unwrap(),
             b"wall"
         );
         assert!(!dirs.state.join("wallpaper.png").exists());
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     /// A single-account setup with an encrypted-looking archive and its log.
@@ -631,9 +669,9 @@ mod tests {
         let root = root(name);
         let dirs = AppDirs::under(&root);
         dirs.ensure().unwrap();
-        std::fs::write(dirs.session_db(), b"session").unwrap();
-        std::fs::write(dirs.archive_db(), b"encrypted pages").unwrap();
-        std::fs::write(dirs.state.join("archive.db-wal"), b"committed").unwrap();
+        crate::platform::sfs::write(dirs.session_db(), b"session").unwrap();
+        crate::platform::sfs::write(dirs.archive_db(), b"encrypted pages").unwrap();
+        crate::platform::sfs::write(dirs.state.join("archive.db-wal"), b"committed").unwrap();
         (root, dirs)
     }
 
@@ -645,18 +683,21 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("keyring locked"), "{error}");
         assert_eq!(
-            std::fs::read(dirs.archive_db()).unwrap(),
+            crate::platform::sfs::read(dirs.archive_db()).unwrap(),
             b"encrypted pages"
         );
         assert_eq!(
-            std::fs::read(dirs.state.join("archive.db-wal")).unwrap(),
+            crate::platform::sfs::read(dirs.state.join("archive.db-wal")).unwrap(),
             b"committed"
         );
-        assert_eq!(std::fs::read(dirs.session_db()).unwrap(), b"session");
+        assert_eq!(
+            crate::platform::sfs::read(dirs.session_db()).unwrap(),
+            b"session"
+        );
         let account = dirs.account(&AccountId::first());
         assert!(!account.archive_db().exists());
         assert!(!account.session_db().exists());
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -673,17 +714,17 @@ mod tests {
         .unwrap();
         assert_eq!(seen, Some((dirs.archive_db(), account.archive_db())));
         assert_eq!(
-            std::fs::read(account.archive_db()).unwrap(),
+            crate::platform::sfs::read(account.archive_db()).unwrap(),
             b"encrypted pages"
         );
         assert_eq!(
-            std::fs::read(account.state.join("archive.db-wal")).unwrap(),
+            crate::platform::sfs::read(account.state.join("archive.db-wal")).unwrap(),
             b"committed"
         );
         // A second start finds nothing left to move and asks for no key.
         dirs.adopt_single_account_with(|_, _| panic!("nothing to copy"))
             .unwrap();
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -692,22 +733,22 @@ mod tests {
         let account = dirs.account(&AccountId::first());
         account.ensure().unwrap();
         // The log went first, then the process stopped.
-        std::fs::rename(
+        crate::platform::sfs::rename(
             dirs.state.join("archive.db-wal"),
             account.state.join("archive.db-wal"),
         )
         .unwrap();
         dirs.adopt_single_account_with(|_, _| Ok(())).unwrap();
         assert_eq!(
-            std::fs::read(account.archive_db()).unwrap(),
+            crate::platform::sfs::read(account.archive_db()).unwrap(),
             b"encrypted pages"
         );
         assert_eq!(
-            std::fs::read(account.state.join("archive.db-wal")).unwrap(),
+            crate::platform::sfs::read(account.state.join("archive.db-wal")).unwrap(),
             b"committed"
         );
         assert!(!dirs.archive_db().exists());
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -715,21 +756,27 @@ mod tests {
         let (root, dirs) = legacy("linked-already");
         let account = dirs.account(&AccountId::first());
         account.ensure().unwrap();
-        std::fs::write(account.session_db(), b"linked").unwrap();
-        std::fs::write(account.archive_db(), b"another history").unwrap();
+        crate::platform::sfs::write(account.session_db(), b"linked").unwrap();
+        crate::platform::sfs::write(account.archive_db(), b"another history").unwrap();
         dirs.adopt_single_account_with(|_, _| panic!("no key is copied"))
             .unwrap();
-        assert_eq!(std::fs::read(dirs.session_db()).unwrap(), b"session");
         assert_eq!(
-            std::fs::read(dirs.archive_db()).unwrap(),
+            crate::platform::sfs::read(dirs.session_db()).unwrap(),
+            b"session"
+        );
+        assert_eq!(
+            crate::platform::sfs::read(dirs.archive_db()).unwrap(),
             b"encrypted pages"
         );
-        assert_eq!(std::fs::read(account.session_db()).unwrap(), b"linked");
         assert_eq!(
-            std::fs::read(account.archive_db()).unwrap(),
+            crate::platform::sfs::read(account.session_db()).unwrap(),
+            b"linked"
+        );
+        assert_eq!(
+            crate::platform::sfs::read(account.archive_db()).unwrap(),
             b"another history"
         );
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -737,21 +784,24 @@ mod tests {
         let (root, dirs) = legacy("in-the-way");
         let account = dirs.account(&AccountId::first());
         account.ensure().unwrap();
-        std::fs::write(account.archive_db(), b"another history").unwrap();
+        crate::platform::sfs::write(account.archive_db(), b"another history").unwrap();
         let error = dirs
             .adopt_single_account_with(|_, _| panic!("no key is copied"))
             .unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
         assert_eq!(
-            std::fs::read(dirs.archive_db()).unwrap(),
+            crate::platform::sfs::read(dirs.archive_db()).unwrap(),
             b"encrypted pages"
         );
-        assert_eq!(std::fs::read(dirs.session_db()).unwrap(), b"session");
         assert_eq!(
-            std::fs::read(account.archive_db()).unwrap(),
+            crate::platform::sfs::read(dirs.session_db()).unwrap(),
+            b"session"
+        );
+        assert_eq!(
+            crate::platform::sfs::read(account.archive_db()).unwrap(),
             b"another history"
         );
         assert!(!account.session_db().exists());
-        std::fs::remove_dir_all(root).unwrap();
+        crate::platform::sfs::remove_dir_all(root).unwrap();
     }
 }

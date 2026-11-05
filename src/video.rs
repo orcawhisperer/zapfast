@@ -8,13 +8,14 @@
 //! it, and rodio plays it; its position steers the clock while it lasts. Other codecs
 //! are reported so the video can open in the system player instead.
 
+use crate::platform::Instant;
 use std::cell::Cell;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
 
@@ -339,7 +340,7 @@ fn sound_decoder(path: &Path, from: Duration) -> Option<AacTrack> {
 /// sound of the videos WhatsApp sends, whose `esds` carries a custom
 /// SLConfigDescriptor (#265), so the track is read the way the picture is.
 struct AacTrack {
-    mp4: mp4::Mp4Reader<std::io::BufReader<std::fs::File>>,
+    mp4: mp4::Mp4Reader<std::io::BufReader<crate::platform::sfs::File>>,
     track: u32,
     /// The next sample to decode, numbered from 1.
     next: u32,
@@ -360,7 +361,7 @@ impl AacTrack {
     fn open(path: &Path, from: Duration) -> Result<Self, String> {
         use symphonia::core::codecs::{CODEC_TYPE_AAC, CodecParameters, Decoder, DecoderOptions};
 
-        let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+        let file = crate::platform::sfs::File::open(path).map_err(|error| error.to_string())?;
         let size = file.metadata().map_err(|error| error.to_string())?.len();
         let mp4 = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size)
             .map_err(|error| error.to_string())?;
@@ -538,7 +539,7 @@ impl rodio::Source for AacTrack {
 /// The codec and profile of the MP4's sound track, such as "aac (SBR)", or
 /// `None` when there is no sound track.
 fn sound_codec(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::platform::sfs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     let mp4 = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size).ok()?;
     let track = mp4
@@ -1238,7 +1239,7 @@ fn decode(
     frames: &SyncSender<Delivery>,
     waker: &Waker,
 ) -> Result<(), String> {
-    let file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let file = crate::platform::sfs::File::open(path).map_err(|error| error.to_string())?;
     let size = file.metadata().map_err(|error| error.to_string())?.len();
     let mut mp4 = mp4::Mp4Reader::read_header(std::io::BufReader::new(file), size)
         .map_err(|error| format!("not a readable MP4: {error}"))?;
@@ -1693,7 +1694,7 @@ mod tests {
     fn an_unreadable_video_goes_to_the_system_player() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("clip.mp4");
-        std::fs::write(&path, b"not really a video").unwrap();
+        crate::platform::sfs::write(&path, b"not really a video").unwrap();
         let ctx = egui::Context::default();
         let mut player = Player::new(Waker::default());
         player.silence();
@@ -1716,7 +1717,7 @@ mod tests {
         assert_eq!(sound_codec(Path::new(SAMPLE)).as_deref(), Some("aac (LC)"));
         let directory = tempfile::tempdir().unwrap();
         let unreadable = directory.path().join("clip.mp4");
-        std::fs::write(&unreadable, b"not a video").unwrap();
+        crate::platform::sfs::write(&unreadable, b"not a video").unwrap();
         assert_eq!(sound_codec(&unreadable), None);
     }
 
@@ -1957,7 +1958,7 @@ mod tests {
     fn other_files_are_reported_unsupported() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("clip.mp4");
-        std::fs::write(&path, b"not really a video").unwrap();
+        crate::platform::sfs::write(&path, b"not really a video").unwrap();
         let deliveries = collect(&path, Duration::ZERO);
         assert!(matches!(deliveries.last(), Some(Delivery::Unsupported(_))));
     }
@@ -2075,7 +2076,7 @@ mod tests {
     /// stands in for them.
     #[test]
     fn a_video_with_a_custom_sl_config_plays_its_sound() {
-        let mut bytes = std::fs::read(SAMPLE).unwrap();
+        let mut bytes = crate::platform::sfs::read(SAMPLE).unwrap();
         let sl_config = [0x06, 0x80, 0x80, 0x80, 0x01, 0x02];
         let at = bytes
             .windows(sl_config.len())
@@ -2084,7 +2085,7 @@ mod tests {
         bytes[at + sl_config.len() - 1] = 0x00;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("whatsapp.mp4");
-        std::fs::write(&path, bytes).unwrap();
+        crate::platform::sfs::write(&path, bytes).unwrap();
 
         let mut decoder = sound_decoder(&path, Duration::ZERO).expect("the sound opens");
         let rate = rodio::Source::sample_rate(&decoder).get();
@@ -2098,7 +2099,7 @@ mod tests {
     /// core, as rodio's own reader would, instead of staying silent.
     #[test]
     fn an_he_aac_sound_track_plays_its_core() {
-        let mut bytes = std::fs::read(SAMPLE).unwrap();
+        let mut bytes = crate::platform::sfs::read(SAMPLE).unwrap();
         // The sample's AudioSpecificConfig opens with 0x13 0x88: AAC-LC,
         // 22.05 kHz, mono. 0x2B keeps the frequency bits and names SBR.
         let config = [0x05, 0x80, 0x80, 0x80, 0x05, 0x13, 0x88];
@@ -2109,7 +2110,7 @@ mod tests {
         bytes[at + 5] = 0x2B;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("he-aac.mp4");
-        std::fs::write(&path, bytes).unwrap();
+        crate::platform::sfs::write(&path, bytes).unwrap();
 
         let mut decoder = sound_decoder(&path, Duration::ZERO).expect("the sound opens");
         let rate = rodio::Source::sample_rate(&decoder).get();

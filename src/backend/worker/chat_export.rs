@@ -14,7 +14,7 @@ struct Job {
     request: u64,
     chat: ChatId,
     cancelled: Arc<AtomicBool>,
-    task: Option<tokio::task::JoinHandle<()>>,
+    task: Option<crate::platform::JoinHandle<()>>,
 }
 
 impl Drop for State {
@@ -32,7 +32,7 @@ impl Worker {
         if let Some(job) = self.chat_export.job.take() {
             job.cancelled.store(true, Ordering::Release);
             let result = if let Some(mut task) = job.task {
-                match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
+                match crate::platform::time::timeout(Duration::from_secs(1), &mut task).await {
                     Ok(Ok(())) => Ok(None),
                     Ok(Err(_)) => Err("The export stopped unexpectedly".into()),
                     Err(_) => {
@@ -96,9 +96,9 @@ impl Worker {
             task: None,
         });
         let commands = self.commands.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::platform::spawn_blocking(move || {
             let extension = if include_media { "zip" } else { "txt" };
-            let target = rfd::FileDialog::new()
+            let target = crate::platform::FileDialog::new()
                 .set_title("Export chat")
                 .set_file_name(format!("Chat export.{extension}"))
                 .add_filter(
@@ -166,7 +166,7 @@ impl Worker {
         let commands = self.commands.clone();
         let chat = job.chat.clone();
         let cancelled = job.cancelled.clone();
-        job.task = Some(tokio::task::spawn_blocking(move || {
+        job.task = Some(crate::platform::spawn_blocking(move || {
             let result = (|| -> anyhow::Result<_> {
                 crate::archive::chat_export::check_cancelled(&cancelled)?;
                 let parent = target
@@ -277,7 +277,7 @@ mod tests {
         worker.chat_export_target(9, false, Some(target.clone()));
         assert!(worker.chat_export.job.as_ref().unwrap().task.is_some());
         assert!(events.try_recv().is_err());
-        let command = tokio::time::timeout(Duration::from_secs(3), commands.recv())
+        let command = crate::platform::time::timeout(Duration::from_secs(3), commands.recv())
             .await
             .unwrap()
             .unwrap();
@@ -315,7 +315,7 @@ mod tests {
         let release = Release(release);
         let (started, ready) = tokio::sync::oneshot::channel();
         let (finished, done) = tokio::sync::oneshot::channel();
-        let task = tokio::task::spawn_blocking(move || {
+        let task = crate::platform::spawn_blocking(move || {
             let _ = started.send(());
             let _ = blocked.recv();
             let _ = finished.send(flag.load(Ordering::Acquire));
@@ -327,7 +327,7 @@ mod tests {
             cancelled: cancelled.clone(),
             task: Some(task),
         });
-        tokio::time::timeout(Duration::from_secs(3), worker.stop_chat_export())
+        crate::platform::time::timeout(Duration::from_secs(3), worker.stop_chat_export())
             .await
             .unwrap();
         assert!(cancelled.load(Ordering::Acquire));
@@ -341,7 +341,7 @@ mod tests {
         ));
         drop(release);
         assert!(
-            tokio::time::timeout(Duration::from_secs(3), done)
+            crate::platform::time::timeout(Duration::from_secs(3), done)
                 .await
                 .unwrap()
                 .unwrap()

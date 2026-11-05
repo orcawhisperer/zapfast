@@ -6,6 +6,8 @@
 //! change may block (`SMAppService`, the registry, the Flatpak portal, which can
 //! ask the person first), so each runs on a thread of its own.
 
+#[cfg(target_os = "macos")]
+use crate::platform::FilePath as _;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
 use fastframe_autostart::{Autostart, Start, State};
@@ -112,12 +114,12 @@ fn move_launch_agent() {
         return;
     };
     let old = std::path::Path::new(&home).join("Library/LaunchAgents/me.paolino.zapfast.plist");
-    if !old.is_file() {
+    if !old.found_file() {
         return;
     }
     match autostart().set(Some(Start::Hidden)) {
         Ok(_) => {
-            if let Err(error) = std::fs::remove_file(&old) {
+            if let Err(error) = crate::platform::sfs::remove_file(&old) {
                 log::warn!("could not remove the old login item: {error}");
             }
         }

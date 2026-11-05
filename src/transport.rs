@@ -84,10 +84,10 @@ pub async fn dial(addrs: Vec<SocketAddr>) -> std::io::Result<(TcpStream, SocketA
 /// trait asks a dial that is cancelled to leave no socket behind. Attempts
 /// live in their own tasks, so nothing else would stop them.
 #[derive(Default)]
-struct Attempts(Vec<tokio::task::JoinHandle<()>>);
+struct Attempts(Vec<crate::platform::JoinHandle<()>>);
 
 impl Attempts {
-    fn start(&mut self, handle: tokio::task::JoinHandle<()>) {
+    fn start(&mut self, handle: crate::platform::JoinHandle<()>) {
         self.0.push(handle);
     }
 }
@@ -125,19 +125,19 @@ where
     let mut last_kind = std::io::ErrorKind::Other;
     let mut in_flight = 0usize;
     let mut exhausted = false;
-    let mut next_start = tokio::time::Instant::now();
+    let mut next_start = crate::platform::time::Instant::now();
 
     loop {
-        while !exhausted && tokio::time::Instant::now() >= next_start {
+        while !exhausted && crate::platform::time::Instant::now() >= next_start {
             let Some(addr) = remaining.next() else {
                 exhausted = true;
                 break;
             };
             in_flight += 1;
-            next_start = tokio::time::Instant::now() + head_start;
+            next_start = crate::platform::time::Instant::now() + head_start;
             let answers = answers.clone();
             let open = Arc::clone(&open);
-            running.start(tokio::spawn(async move {
+            running.start(crate::platform::spawn(async move {
                 let result = open(addr).await;
                 let _ = answers.send((addr, result)).await;
             }));
@@ -146,7 +146,7 @@ where
             if exhausted {
                 return Err(no_address_answered(&failures, last_kind));
             }
-            next_start = tokio::time::Instant::now();
+            next_start = crate::platform::time::Instant::now();
             continue;
         }
         tokio::select! {
@@ -161,13 +161,13 @@ where
                     last_kind = error.kind();
                     failures.push(format!("{addr}: {error}"));
                     in_flight -= 1;
-                    next_start = tokio::time::Instant::now();
+                    next_start = crate::platform::time::Instant::now();
                 }
                 // Every attempt has reported and dropped its sender, so no
                 // answer can still arrive.
                 None => in_flight = 0,
             },
-            _ = tokio::time::sleep_until(next_start) => {}
+            _ = crate::platform::time::sleep_until(next_start) => {}
         }
     }
 }
@@ -278,8 +278,8 @@ pub async fn websocket(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::Instant;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-    use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -330,7 +330,7 @@ mod tests {
 
         let (value, addr) = race(vec![slow, fast], HEAD_START, move |addr| async move {
             if addr == slow {
-                tokio::time::sleep(Duration::from_secs(5)).await;
+                crate::platform::time::sleep(Duration::from_secs(5)).await;
             }
             Ok(addr)
         })

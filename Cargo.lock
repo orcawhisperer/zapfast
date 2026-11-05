@@ -3561,10 +3561,12 @@ dependencies = [
  "jiff-core",
  "jiff-static",
  "jiff-tzdb-platform",
+ "js-sys",
  "log",
  "portable-atomic",
  "portable-atomic-util",
  "serde_core",
+ "wasm-bindgen",
  "windows-link",
 ]
 
@@ -7720,6 +7722,7 @@ dependencies = [
  "event-listener",
  "fluent-uri",
  "futures",
+ "getrandom 0.4.3",
  "hashbrown 0.17.1",
  "hex",
  "hkdf",
@@ -8088,6 +8091,32 @@ dependencies = [
  "once_cell",
  "pkg-config",
 ]
+
+[[package]]
+name = "web-shim-fastframe-emoji"
+version = "0.15.4"
+dependencies = [
+ "egui",
+]
+
+[[package]]
+name = "web-shim-fastframe-shell"
+version = "0.15.4"
+dependencies = [
+ "egui",
+]
+
+[[package]]
+name = "web-shim-openh264"
+version = "0.9.3"
+
+[[package]]
+name = "web-shim-opus"
+version = "0.4.0"
+
+[[package]]
+name = "web-shim-ureq"
+version = "3.0.0"
 
 [[package]]
 name = "web-sys"
@@ -8961,7 +8990,9 @@ dependencies = [
  "apple-native-keyring-store",
  "arboard",
  "async-channel",
+ "async-trait",
  "base64 0.23.1",
+ "bytes",
  "cbc",
  "clap",
  "directories",
@@ -8990,8 +9021,10 @@ dependencies = [
  "fastframe-titlebar",
  "fastframe-tray",
  "fastframe-update",
+ "futures",
  "gethostname",
  "getrandom 0.4.3",
+ "gloo-timers",
  "hkdf",
  "hmac 0.13.0",
  "http",
@@ -8999,6 +9032,7 @@ dependencies = [
  "icu_properties",
  "image",
  "jiff",
+ "js-sys",
  "keyring-core",
  "libc",
  "libwebp-sys2 0.2.0",
@@ -9041,6 +9075,16 @@ dependencies = [
  "unicode-bidi",
  "unicode-segmentation",
  "ureq",
+ "wacore",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-shim-fastframe-emoji",
+ "web-shim-fastframe-shell",
+ "web-shim-openh264",
+ "web-shim-opus",
+ "web-shim-ureq",
+ "web-sys",
+ "web-time",
  "webp-animation",
  "whatsapp-rust",
  "windows",

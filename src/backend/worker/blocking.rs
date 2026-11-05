@@ -23,7 +23,7 @@ impl Worker {
         let generation = self.blocklist.generation;
         self.publish_blocklist(None);
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = client
                 .blocking()
                 .get_blocklist()
@@ -79,7 +79,7 @@ impl Worker {
         };
         self.publish_blocklist(None);
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = if blocked {
                 client.blocking().block(&jid).await
             } else {

@@ -3,6 +3,7 @@
 //! Each message keeps its raw protobuf because attachment download keys may be
 //! needed long after history sync.
 
+use crate::platform::FilePath as _;
 use std::path::{Path, PathBuf};
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -1870,7 +1871,7 @@ impl Archive {
         })?;
         Ok(rows
             .flatten()
-            .filter(|sticker| sticker.path.exists())
+            .filter(|sticker| sticker.path.found())
             .collect())
     }
 
@@ -5669,7 +5670,7 @@ pub(crate) mod tests {
     fn read_positions_and_pending_sync_survive_reopening_the_archive() {
         let dir = std::env::temp_dir().join(format!("zapfast-read-test-{}", std::process::id()));
         let path = dir.join("archive.db");
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::platform::sfs::remove_dir_all(&dir);
         let chat = "1@s.whatsapp.net";
         {
             let archive = Archive::open_with_key(&path, &[7; 32]).unwrap();
@@ -5702,7 +5703,7 @@ pub(crate) mod tests {
             archive.clear().unwrap();
             assert!(archive.read_through(chat).unwrap().is_none());
         }
-        std::fs::remove_dir_all(dir).unwrap();
+        crate::platform::sfs::remove_dir_all(dir).unwrap();
     }
 
     /// A statement that succeeds without changing a row cannot confirm either media path.
@@ -6113,7 +6114,7 @@ mod sticker_tests {
         let dir = tempfile::tempdir().expect("temp");
         let file = |name: &str| {
             let path = dir.path().join(name);
-            std::fs::write(&path, b"webp").expect("writes");
+            crate::platform::sfs::write(&path, b"webp").expect("writes");
             path.display().to_string()
         };
         let (sent, received) = (file("sent.webp"), file("received.webp"));
@@ -6148,7 +6149,7 @@ mod sticker_tests {
         let dir = tempfile::tempdir().expect("temp");
         let file = |name: &str| {
             let path = dir.path().join(name);
-            std::fs::write(&path, b"webp").expect("writes");
+            crate::platform::sfs::write(&path, b"webp").expect("writes");
             path.display().to_string()
         };
         let (sent, received) = (file("sent.webp"), file("received.webp"));
@@ -6174,7 +6175,7 @@ mod sticker_tests {
         let dir = tempfile::tempdir().expect("temp");
         let file = |name: &str| {
             let path = dir.path().join(name);
-            std::fs::write(&path, b"webp").expect("writes");
+            crate::platform::sfs::write(&path, b"webp").expect("writes");
             path.display().to_string()
         };
         let (open, hidden) = (file("open.webp"), file("hidden.webp"));
@@ -6247,7 +6248,7 @@ mod media_path_tests {
     fn the_album_keeps_a_photo_and_forgets_a_missing_file() {
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join("photo.jpg");
-        std::fs::write(&file, b"jpeg").unwrap();
+        crate::platform::sfs::write(&file, b"jpeg").unwrap();
 
         let archive = Archive::in_memory().expect("opens");
         archive.ensure_chat("a@s.whatsapp.net", "A").expect("chat");
@@ -6291,8 +6292,8 @@ mod media_path_tests {
         let root = tempfile::tempdir().unwrap();
         let jpeg = root.path().join("photo.jpg");
         let bmp = root.path().join("scan.bmp");
-        std::fs::write(&jpeg, b"jpeg").unwrap();
-        std::fs::write(&bmp, b"bmp").unwrap();
+        crate::platform::sfs::write(&jpeg, b"jpeg").unwrap();
+        crate::platform::sfs::write(&bmp, b"bmp").unwrap();
 
         let archive = Archive::in_memory().expect("opens");
         archive.ensure_chat("a@s.whatsapp.net", "A").expect("chat");
@@ -6331,7 +6332,7 @@ mod media_path_tests {
         let root = tempfile::tempdir().unwrap();
         let file = |name: &str| {
             let path = root.path().join(name);
-            std::fs::write(&path, b"picture").unwrap();
+            crate::platform::sfs::write(&path, b"picture").unwrap();
             path
         };
         let image = |path: Option<std::path::PathBuf>| Media {

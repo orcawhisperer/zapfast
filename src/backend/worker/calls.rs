@@ -90,7 +90,7 @@ impl CallRuntime {
             log::warn!("[CALL] the call's events were already taken");
             return;
         };
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             loop {
                 tokio::select! {
                     event = media.recv() => match event {
@@ -343,7 +343,7 @@ impl Worker {
             Ok((call, frames)) => {
                 let (tx, events) = async_channel::bounded(1);
                 // The call service's answer, as the runtime's first event.
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     if let Ok(answer) = answers.recv().await {
                         let _ = tx.send(CallRuntimeEvent::GroupStarted(answer)).await;
                     }
@@ -418,7 +418,7 @@ impl Worker {
             Ok((call, frames)) => {
                 let (tx, events) = async_channel::bounded(1);
                 // The join's answer, as the runtime's first event.
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     if let Ok(answer) = answers.recv().await {
                         let _ = tx.send(CallRuntimeEvent::LinkJoined(answer)).await;
                     }
@@ -1364,7 +1364,7 @@ pub(super) fn missed_call_stub(stub: wa::web_message_info::StubType) -> Option<C
 /// runs on a blocking thread rather than on the async loop, where a slow device would hold up
 /// message handling and the call's own events.
 async fn discover_devices() -> calls::DeviceList {
-    tokio::task::spawn_blocking(calls::devices)
+    crate::platform::spawn_blocking(calls::devices)
         .await
         .unwrap_or_default()
 }

@@ -4,8 +4,9 @@
 //! the next picture or sticker the reader sent failed too (#298, #307).
 //! Opening the picker did the same with the chat stickers it fetches (#405).
 
+use crate::platform::Instant;
 use std::collections::{HashSet, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Favorites started per tick of the worker's five-second clock.
 const PER_TICK: usize = 2;

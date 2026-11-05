@@ -439,8 +439,8 @@ mod tests {
         let Some(path) = std::env::var_os("ZAPFAST_OGG_PROBE") else {
             return;
         };
-        let bytes = std::fs::read(path).expect("readable");
-        let started = std::time::Instant::now();
+        let bytes = crate::platform::sfs::read(path).expect("readable");
+        let started = crate::platform::Instant::now();
         let samples = decode(&bytes).expect("decodes");
         eprintln!(
             "{} samples ({:.2} s), loudness {:.3}, in {:?}; bars {:?}",

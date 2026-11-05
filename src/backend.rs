@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -165,7 +166,7 @@ pub enum Command {
     PollHistoryFailed {
         chat: ChatId,
         message: String,
-        requested: std::time::Instant,
+        requested: crate::platform::Instant,
     },
     CreatePoll {
         chat: ChatId,
@@ -1762,31 +1763,47 @@ impl Backend {
     pub fn spawn(dirs: AccountDirs, waker: Waker) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .thread_name("zapfast-runtime")
-            .enable_all()
-            .build()
-            .expect("unable to start the async runtime");
         let worker_commands = command_tx.clone();
         let (startup, started) = tokio::sync::oneshot::channel();
-        let thread = std::thread::Builder::new()
-            .name("zapfast-backend".to_string())
-            .spawn(move || {
-                runtime.block_on(async move {
-                    if started.await.is_ok() {
-                        worker::run(dirs, event_tx, worker_commands, command_rx, waker).await;
-                    }
-                });
-                runtime.shutdown_timeout(Duration::from_secs(3));
-            })
-            .expect("unable to start the backend thread");
+        // A page has one thread, so the worker shares it with the window.
+        #[cfg(target_arch = "wasm32")]
+        let thread = {
+            crate::platform::spawn(async move {
+                if started.await.is_ok() {
+                    worker::run(dirs, event_tx, worker_commands, command_rx, waker).await;
+                }
+            });
+            None
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let thread = {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .thread_name("zapfast-runtime")
+                .enable_all()
+                .build()
+                .expect("unable to start the async runtime");
+            Some(
+                std::thread::Builder::new()
+                    .name("zapfast-backend".to_string())
+                    .spawn(move || {
+                        runtime.block_on(async move {
+                            if started.await.is_ok() {
+                                worker::run(dirs, event_tx, worker_commands, command_rx, waker)
+                                    .await;
+                            }
+                        });
+                        runtime.shutdown_timeout(Duration::from_secs(3));
+                    })
+                    .expect("unable to start the backend thread"),
+            )
+        };
 
         Self {
             startup: Some(startup),
             commands: command_tx,
             events: event_rx,
-            thread: Some(thread),
+            thread,
             offline: false,
             #[cfg(any(test, feature = "demo"))]
             demo_commands: None,

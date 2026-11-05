@@ -1,0 +1,9 @@
+[package]
+name = "web-shim-opus"
+version = "0.4.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Answers 'not available' with the opus crate's API: libopus cannot build for a browser, where voice goes through WebCodecs."
+
+[dependencies]

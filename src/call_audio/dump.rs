@@ -18,7 +18,7 @@
 //! done. The writes are buffered and happen on the microphone's reading thread, never on an audio
 //! callback.
 
-use std::fs::File;
+use crate::platform::sfs::File;
 use std::io::{BufWriter, Read as _, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -55,12 +55,12 @@ impl AudioDump {
 
     pub(crate) fn create(folder: &Path) -> std::io::Result<Self> {
         static STREAM: AtomicU32 = AtomicU32::new(1);
-        let started = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+        let started = crate::platform::SystemTime::now()
+            .duration_since(crate::platform::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         let stream = STREAM.fetch_add(1, Ordering::Relaxed);
-        std::fs::create_dir_all(folder)?;
+        crate::platform::sfs::create_dir_all(folder)?;
         let path = |name: &str| folder.join(format!("{started}-{stream}-{name}"));
         let mut order = BufWriter::new(File::create(path("order.csv"))?);
         writeln!(order, "reference_chunks_before,delay_hint_ms")?;
@@ -261,7 +261,7 @@ mod tests {
                 dump.microphone(&chunk, u32::from(index % 2 == 0), 52);
                 dump.output(&chunk);
             }
-            let mut files: Vec<PathBuf> = std::fs::read_dir(folder.path())
+            let mut files: Vec<PathBuf> = crate::platform::sfs::read_dir(folder.path())
                 .expect("listed")
                 .map(|entry| entry.expect("an entry").path())
                 .collect();
@@ -279,7 +279,7 @@ mod tests {
             assert_eq!(samples.len(), 250 * 160);
             assert_eq!(samples[1], 1.0 / 160.0 - 0.5);
         }
-        let order = std::fs::read_to_string(order).expect("the order");
+        let order = crate::platform::sfs::read_to_string(order).expect("the order");
         let lines: Vec<&str> = order.lines().collect();
         assert_eq!(lines[0], "reference_chunks_before,delay_hint_ms");
         assert_eq!(lines[1], "1,52");

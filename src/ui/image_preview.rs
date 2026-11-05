@@ -1156,7 +1156,7 @@ mod tile_tests {
                 let rect = Rect::from_min_size(pos2(16.0, 16.0), Vec2::splat(THUMB));
                 let uri =
                     thumbnail_uri(&ctx, "fixture", &item.id, item.thumbnail.as_ref().unwrap());
-                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+                let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(2);
                 loop {
                     match egui::Image::new(uri.clone())
                         .load_for_size(&ctx, rect.size())
@@ -1168,7 +1168,7 @@ mod tile_tests {
                         }
                         egui::load::TexturePoll::Pending { .. } => {
                             assert!(
-                                std::time::Instant::now() < deadline,
+                                crate::platform::Instant::now() < deadline,
                                 "thumbnail did not load"
                             );
                             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -1237,7 +1237,7 @@ mod tile_tests {
                 thumbnail: None,
             };
             let ctx = egui::Context::default();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(10);
             loop {
                 let mut texture = None;
                 let rect = Rect::from_min_size(pos2(20.0, 20.0), Vec2::splat(THUMB));
@@ -1275,7 +1275,7 @@ mod tile_tests {
                 }
                 output.textures_delta.clear();
                 assert!(
-                    std::time::Instant::now() < deadline,
+                    crate::platform::Instant::now() < deadline,
                     "poster did not arrive"
                 );
                 std::thread::sleep(std::time::Duration::from_millis(10));

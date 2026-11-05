@@ -27,9 +27,9 @@ pub(super) fn create_folder(root: &Path, folder: &Path) -> std::io::Result<()> {
         .parent()
         .filter(|account| account.parent() == Some(root))
         .ok_or_else(|| std::io::Error::other("invalid download folder layout"))?;
-    std::fs::create_dir_all(root)?;
+    crate::platform::sfs::create_dir_all(root)?;
     for directory in [account, folder] {
-        match std::fs::create_dir(directory) {
+        match crate::platform::sfs::create_dir(directory) {
             Ok(()) => {}
             Err(error)
                 if error.kind() == std::io::ErrorKind::AlreadyExists
@@ -46,7 +46,7 @@ pub(super) fn discard_staging(root: &Path, slot: &AccountId, phone: Option<&str>
     if !real_directory(&account) {
         return;
     }
-    let Ok(chats) = std::fs::read_dir(account) else {
+    let Ok(chats) = crate::platform::sfs::read_dir(account) else {
         return;
     };
     for chat in chats.flatten() {
@@ -58,7 +58,7 @@ pub(super) fn discard_staging(root: &Path, slot: &AccountId, phone: Option<&str>
 
 /// Directory metadata is read without following symbolic links or junctions.
 fn real_directory(path: &Path) -> bool {
-    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
+    crate::platform::sfs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_dir())
 }
 
 /// The account's folder: its phone number, which stays the same whichever
@@ -190,16 +190,20 @@ mod tests {
         let replacement =
             account_folder(root.path(), &first, Some("15550003333@s.whatsapp.net")).join("Alice");
         for dir in [&ours, &other, &replacement] {
-            std::fs::create_dir_all(dir).unwrap();
-            std::fs::write(dir.join(".photo.0123456789abcdef.part"), b"partial").unwrap();
-            std::fs::write(dir.join("photo.jpg"), b"finished").unwrap();
+            crate::platform::sfs::create_dir_all(dir).unwrap();
+            crate::platform::sfs::write(dir.join(".photo.0123456789abcdef.part"), b"partial")
+                .unwrap();
+            crate::platform::sfs::write(dir.join("photo.jpg"), b"finished").unwrap();
         }
         let unrelated = root.path().join("unrelated");
-        std::fs::create_dir(&unrelated).unwrap();
-        std::fs::write(unrelated.join(".unrelated.part"), b"keep").unwrap();
+        crate::platform::sfs::create_dir(&unrelated).unwrap();
+        crate::platform::sfs::write(unrelated.join(".unrelated.part"), b"keep").unwrap();
         discard_staging(root.path(), &first, Some("15550001111@s.whatsapp.net"));
         assert!(!ours.join(".photo.0123456789abcdef.part").exists());
-        assert_eq!(std::fs::read(ours.join("photo.jpg")).unwrap(), b"finished");
+        assert_eq!(
+            crate::platform::sfs::read(ours.join("photo.jpg")).unwrap(),
+            b"finished"
+        );
         assert!(other.join(".photo.0123456789abcdef.part").exists());
         assert!(replacement.join(".photo.0123456789abcdef.part").exists());
         assert!(unrelated.join(".unrelated.part").exists());
@@ -214,13 +218,13 @@ mod tests {
         let first = AccountId::first();
         let phone = Some("15550001111@s.whatsapp.net");
         let target = outside.path().join(".keep.part");
-        std::fs::write(&target, b"keep").unwrap();
+        crate::platform::sfs::write(&target, b"keep").unwrap();
         let account = account_folder(root.path(), &first, phone);
         std::os::unix::fs::symlink(outside.path(), &account).unwrap();
         discard_staging(root.path(), &first, phone);
         assert!(target.exists());
-        std::fs::remove_file(&account).unwrap();
-        std::fs::create_dir(&account).unwrap();
+        crate::platform::sfs::remove_file(&account).unwrap();
+        crate::platform::sfs::create_dir(&account).unwrap();
         std::os::unix::fs::symlink(outside.path(), account.join("Alice")).unwrap();
         discard_staging(root.path(), &first, phone);
         assert!(target.exists());
@@ -321,7 +325,7 @@ mod tests {
                     .any(|reserved| reserved.eq_ignore_ascii_case(&label)),
                 "{label}"
             );
-            std::fs::create_dir_all(&path).unwrap();
+            crate::platform::sfs::create_dir_all(&path).unwrap();
             assert!(path.is_dir());
         }
         assert_eq!(

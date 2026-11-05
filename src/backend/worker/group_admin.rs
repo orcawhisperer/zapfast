@@ -63,7 +63,7 @@ impl Worker {
         };
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = match client.groups().get_invite_link(jid, reset).await {
                 // Only WhatsApp's own links are taken; nothing else is shown.
                 Ok(link) => InviteLink::new(link).ok_or(Failure::Failed),
@@ -109,7 +109,7 @@ impl Worker {
         let lids = self.lid_to_pn.clone();
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = client
                 .groups()
                 .add_participants(jid, &jids)
@@ -159,7 +159,7 @@ impl Worker {
         });
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let groups = client.groups();
             let result = match permission {
                 Permission::EditInfo => groups.set_locked(jid, !members).await,
@@ -228,7 +228,7 @@ impl Worker {
         let lids = self.lid_to_pn.clone();
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let groups = client.groups();
             let targets = [target];
             let result = match change {

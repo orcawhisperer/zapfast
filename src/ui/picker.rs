@@ -1858,7 +1858,7 @@ struct FileStamp {
 
 impl FileStamp {
     fn of(path: &Path) -> Self {
-        match std::fs::metadata(path) {
+        match crate::platform::sfs::metadata(path) {
             Ok(metadata) => FileStamp {
                 len: metadata.len(),
                 modified: metadata.modified().ok(),
@@ -1931,7 +1931,7 @@ fn content_hash(ctx: &egui::Context, path: &Path) -> Option<String> {
     if known.is_some() {
         return known;
     }
-    let hash = crate::backend::sticker_store::content_hash(&std::fs::read(path).ok()?);
+    let hash = crate::backend::sticker_store::content_hash(&crate::platform::sfs::read(path).ok()?);
     ctx.data_mut(|data| {
         data.get_temp_mut_or_default::<HashMemo>(id)
             .0
@@ -1965,7 +1965,7 @@ fn probe_motion(path: &Path) -> Option<bool> {
         return Some(true);
     }
     let mut head = [0u8; 64];
-    let mut file = std::fs::File::open(path).ok()?;
+    let mut file = crate::platform::sfs::File::open(path).ok()?;
     let read = std::io::Read::read(&mut file, &mut head).ok()?;
     Some(crate::animation::webp_moves(&head[..read]))
 }
@@ -1983,9 +1983,9 @@ mod motion_tests {
     #[test]
     fn sticker_motion_is_probed_once_until_the_file_changes() {
         let dir = std::env::temp_dir().join(format!("zapfast-motion-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("creates temporary directory");
+        crate::platform::sfs::create_dir_all(&dir).expect("creates temporary directory");
         let path = dir.join("animated.webp");
-        std::fs::write(&path, b"RIFF0000WEBPANIM").expect("writes animated header");
+        crate::platform::sfs::write(&path, b"RIFF0000WEBPANIM").expect("writes animated header");
         let mut memo = MotionMemo::default();
         let reads = std::cell::Cell::new(0usize);
         let probe = |path: &Path| {
@@ -2001,30 +2001,31 @@ mod motion_tests {
         );
         // A different-sized still header changes the file stamp, so the memo
         // re-probes instead of trusting a stale result.
-        std::fs::write(&path, b"RIFF0000WEBPVP8X still").expect("writes a still header");
+        crate::platform::sfs::write(&path, b"RIFF0000WEBPVP8X still")
+            .expect("writes a still header");
         assert!(!memo.moves(&path, probe), "a changed file is re-probed");
         assert_eq!(reads.get(), 2);
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
     fn sticker_motion_is_served_from_the_picker_context() {
         let dir = std::env::temp_dir().join(format!("zapfast-motion-ctx-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("creates temporary directory");
+        crate::platform::sfs::create_dir_all(&dir).expect("creates temporary directory");
         let path = dir.join("animated.webp");
-        std::fs::write(&path, b"RIFF0000WEBPANIM").expect("writes animated header");
+        crate::platform::sfs::write(&path, b"RIFF0000WEBPANIM").expect("writes animated header");
         let ctx = egui::Context::default();
         assert!(moves(&ctx, &path));
         assert!(moves(&ctx, &path), "the picker memo survives frames");
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_failed_probe_is_retried_instead_of_memoized() {
         let dir = std::env::temp_dir().join(format!("zapfast-motion-retry-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("creates temporary directory");
+        crate::platform::sfs::create_dir_all(&dir).expect("creates temporary directory");
         let path = dir.join("animated.webp");
-        std::fs::write(&path, b"RIFF0000WEBPANIM").expect("writes animated header");
+        crate::platform::sfs::write(&path, b"RIFF0000WEBPANIM").expect("writes animated header");
         let mut memo = MotionMemo::default();
         let reads = std::cell::Cell::new(0usize);
         // The first probe fails the way a sharing violation or a transient read
@@ -2048,7 +2049,7 @@ mod motion_tests {
         assert_eq!(reads.get(), 2);
         assert!(memo.moves(&path, probe), "the successful probe is memoized");
         assert_eq!(reads.get(), 2, "a memoized success is not re-read");
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 }
 
@@ -2085,7 +2086,7 @@ mod pack_tests {
     fn a_local_pack_holds_a_sticker_by_its_content_hash() {
         let dir = tempfile::tempdir().expect("temp");
         let path = dir.path().join("from-a-chat.webp");
-        std::fs::write(&path, b"sun").expect("writes");
+        crate::platform::sfs::write(&path, b"sun").expect("writes");
         let ctx = egui::Context::default();
         let hash = content_hash(&ctx, &path).expect("hashes");
         assert_eq!(hash, crate::backend::sticker_store::content_hash(b"sun"));
@@ -2096,7 +2097,7 @@ mod pack_tests {
             .push(holder.dir.join(format!("{hash}.webp")));
         assert!(pack_holds(&holder, &hash));
         // A changed file is hashed again.
-        std::fs::write(&path, b"moon!").expect("writes");
+        crate::platform::sfs::write(&path, b"moon!").expect("writes");
         assert_ne!(content_hash(&ctx, &path).expect("hashes"), hash);
     }
 
@@ -2180,7 +2181,7 @@ mod pack_tests {
             crate::settings::Settings::default(),
         );
         let sticker = directory.path().join("duck.webp");
-        std::fs::write(&sticker, b"RIFF0000WEBP").expect("writes");
+        crate::platform::sfs::write(&sticker, b"RIFF0000WEBP").expect("writes");
         app.stickers_saved = vec![sticker.clone()];
         app.sticker_emojis = [(sticker.clone(), vec!["🦆".to_owned()])].into();
         app.sticker_search = "duck".into();

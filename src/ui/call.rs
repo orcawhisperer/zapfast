@@ -7,7 +7,7 @@
 //! [`crate::calls::CallUpdate`], which the worker fills from the protocol's
 //! own events. This module draws them and pushes [`Action`]s.
 
-use std::time::Instant;
+use crate::platform::Instant;
 
 use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, Rect, TextureOptions, Vec2, vec2};
 

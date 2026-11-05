@@ -3,9 +3,11 @@
 //! Views queue [`Action`]s while drawing. The app applies them after the frame
 //! and processes backend events.
 
+use crate::platform::FilePath as _;
+use crate::platform::Instant;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::account::Account;
 use crate::audio::{Player, Recorder};
@@ -2126,12 +2128,12 @@ impl App {
         // The key outlives the archive only by mistake: forget it once the
         // archive is gone, never before.
         let key = crate::archive::archive_key_identity(&dirs.archive_db()).ok();
-        let state_error = std::fs::remove_dir_all(&dirs.state).err();
-        let cache_error = std::fs::remove_dir_all(&dirs.cache)
+        let state_error = crate::platform::sfs::remove_dir_all(&dirs.state).err();
+        let cache_error = crate::platform::sfs::remove_dir_all(&dirs.cache)
             .err()
             .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
         if let Some(identity) = key
-            && !dirs.archive_db().exists()
+            && !dirs.archive_db().found()
             && cfg!(not(test))
             && let Err(error) = crate::archive::forget_archive_key(&identity)
         {
@@ -2517,7 +2519,7 @@ impl App {
         let account = self.account().id.clone();
         if !self
             .notifications
-            .allow(&account, chat_id, std::time::Instant::now(), limited)
+            .allow(&account, chat_id, crate::platform::Instant::now(), limited)
         {
             return;
         }
@@ -7806,7 +7808,7 @@ impl App {
                     return;
                 };
                 media.path = None;
-                if path.is_file() {
+                if path.found_file() {
                     // A file that does not decode is not fetched again on its
                     // own, or one that never decodes would download forever:
                     // the bubble offers the retry, as a failed download does.
@@ -7824,7 +7826,7 @@ impl App {
                 message,
                 card,
             } => {
-                if crate::image_preview::can_view(&path) && path.is_file() {
+                if crate::image_preview::can_view(&path) && path.found_file() {
                     self.open_viewer(
                         PreviewState::new(Some(path), chat, message).with_card(card),
                         ctx,
@@ -7871,7 +7873,7 @@ impl App {
                 self.refocus_composer(ctx);
             }
             Action::PreviewSticker(path) => {
-                if path.is_file() {
+                if path.found_file() {
                     self.sticker_view = Some(crate::image_preview::StickerPreview::new(path));
                     self.dialog = None;
                     self.picker = None;
@@ -7972,10 +7974,10 @@ impl App {
             }
             Action::OpenFile(path) => {
                 let allowed = crate::safety::can_open_attachment(&path);
-                if allowed && matches!(path.try_exists(), Ok(false)) {
+                if allowed && matches!(path.checked_found(), Ok(false)) {
                     self.attachment_missing(path);
-                } else if allowed && path.is_file() {
-                    if let Err(error) = open::that_detached(&path) {
+                } else if allowed && path.found_file() {
+                    if let Err(error) = crate::platform::open::that_detached(&path) {
                         self.toast_error(format!("Could not open the attachment: {error}"));
                     }
                 } else {
@@ -8011,8 +8013,8 @@ impl App {
                 self.backend.send(Command::SaveAttachments { files });
             }
             Action::OpenFolder(path) => {
-                if path.is_dir() {
-                    if let Err(error) = open::that_detached(&path) {
+                if path.found_folder() {
+                    if let Err(error) = crate::platform::open::that_detached(&path) {
                         self.toast_error(format!("Could not open the folder: {error}"));
                     }
                 } else {
@@ -9623,8 +9625,8 @@ impl App {
             Action::OpenThemesFolder => {
                 let directory = self.dirs.config.join("themes");
                 std::thread::spawn(move || {
-                    if std::fs::create_dir_all(&directory).is_ok() {
-                        let _ = open::that(directory);
+                    if crate::platform::sfs::create_dir_all(&directory).is_ok() {
+                        let _ = crate::platform::open::that(directory);
                     }
                 });
             }
@@ -12117,7 +12119,7 @@ mod native_clipboard_tests {
     fn native_file_uris_decode_escaped_names_and_keep_file_precedence() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("clipboard photo ✓.png");
-        std::fs::write(&path, b"fixture").unwrap();
+        crate::platform::sfs::write(&path, b"fixture").unwrap();
         let uri = reqwest::Url::from_file_path(&path).unwrap();
         let bytes = format!(
             "# copied files\r\n{uri}\r\n\r\nhttps://example.com/image.png\r\nfile://remote/share/image.png\r\n"
@@ -12179,11 +12181,23 @@ fn clipboard_contents(
 }
 
 /// The clipboard's text, if it holds any.
+#[cfg(target_arch = "wasm32")]
+fn clipboard_text() -> Option<String> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn clipboard_text() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok()
 }
 
 /// Files copied to the clipboard by a file manager.
+#[cfg(target_arch = "wasm32")]
+fn clipboard_files() -> Result<Vec<PathBuf>, String> {
+    Err("a page reads the clipboard through paste events".to_owned())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn clipboard_files() -> Result<Vec<PathBuf>, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
     clipboard
@@ -12193,6 +12207,12 @@ fn clipboard_files() -> Result<Vec<PathBuf>, String> {
 }
 
 /// Clipboard image as width, height, and straight-alpha RGBA.
+#[cfg(target_arch = "wasm32")]
+fn clipboard_image() -> Result<(usize, usize, Vec<u8>), String> {
+    Err("a page reads the clipboard through paste events".to_owned())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn clipboard_image() -> Result<(usize, usize, Vec<u8>), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
     let image = clipboard.get_image().map_err(|error| error.to_string())?;
@@ -12207,6 +12227,12 @@ fn clipboard_image() -> Result<(usize, usize, Vec<u8>), String> {
 /// The handle stays open: on X11 the copying process serves the data, and
 /// dropping arboard's last handle leaves the image only to a clipboard
 /// manager, if there is one.
+#[cfg(target_arch = "wasm32")]
+fn write_clipboard_image(_image: &crate::model::DecodedImage) -> Result<(), String> {
+    Err("copying a picture is not available in the browser yet".to_owned())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn write_clipboard_image(image: &crate::model::DecodedImage) -> Result<(), String> {
     thread_local! {
         static CLIPBOARD: std::cell::RefCell<Option<arboard::Clipboard>> =
@@ -16654,8 +16680,8 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let pdf = directory.path().join("fixture.pdf");
         let zip = directory.path().join("fixture archive.zip");
-        std::fs::write(&pdf, b"%PDF-fixture").unwrap();
-        std::fs::write(&zip, b"PK-fixture").unwrap();
+        crate::platform::sfs::write(&pdf, b"%PDF-fixture").unwrap();
+        crate::platform::sfs::write(&zip, b"PK-fixture").unwrap();
         let (mut app, ctx) = clipboard_app();
         // Finder offers the path, the file name as text, and an icon picture.
         let (reads, image_reads) = clipboard_frame_with_files(
@@ -16681,7 +16707,7 @@ mod tests {
     fn a_uri_list_line_ending_does_not_hide_the_file() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("fixture.zip");
-        std::fs::write(&file, b"PK-fixture").unwrap();
+        crate::platform::sfs::write(&file, b"PK-fixture").unwrap();
         let mut listed = file.clone().into_os_string();
         listed.push("\r");
         let contents = clipboard_contents(
@@ -16700,7 +16726,7 @@ mod tests {
     fn a_file_copied_in_explorer_pastes_on_a_quick_tap_after_switching_back() {
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("fixture report.pdf");
-        std::fs::write(&file, b"%PDF-fixture").unwrap();
+        crate::platform::sfs::write(&file, b"%PDF-fixture").unwrap();
         let (mut app, ctx) = clipboard_app();
         ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("fixture-chat-row")));
         let up = egui::Event::ModifiersChanged(egui::Modifiers::NONE);
@@ -17043,7 +17069,7 @@ mod tests {
         let (backend, mut commands) = Backend::recording();
         app.backend = backend;
         let file = tempfile::NamedTempFile::with_suffix(".png").unwrap();
-        std::fs::write(file.path(), b"not a real image").unwrap();
+        crate::platform::sfs::write(file.path(), b"not a real image").unwrap();
 
         app.apply(
             Action::PreviewImage {
@@ -17524,7 +17550,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = app();
         let file = tempfile::NamedTempFile::with_suffix(".png").unwrap();
-        std::fs::write(file.path(), b"not a real image").unwrap();
+        crate::platform::sfs::write(file.path(), b"not a real image").unwrap();
 
         app.apply(
             Action::PreviewImage {
@@ -17566,7 +17592,7 @@ mod tests {
         .map(|name| dir.path().join(name))
         .collect();
         for path in &paths {
-            std::fs::write(path, b"fixture").unwrap();
+            crate::platform::sfs::write(path, b"fixture").unwrap();
         }
         let media = |path: Option<PathBuf>| Media {
             album: None,
@@ -17730,7 +17756,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = [dir.path().join("first.png"), dir.path().join("second.png")];
         for path in &paths {
-            std::fs::write(path, b"fixture").unwrap();
+            crate::platform::sfs::write(path, b"fixture").unwrap();
         }
         for remote_lock in [false, true] {
             let mut app = app();
@@ -18228,7 +18254,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = app();
         let file = tempfile::NamedTempFile::with_suffix(".heic").unwrap();
-        std::fs::write(file.path(), b"not a real image").unwrap();
+        crate::platform::sfs::write(file.path(), b"not a real image").unwrap();
 
         app.apply(
             Action::PreviewImage {

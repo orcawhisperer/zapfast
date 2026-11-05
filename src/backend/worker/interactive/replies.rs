@@ -290,7 +290,7 @@ impl Worker {
             pending: true,
         });
         self.store_message(row, Some(message.encode_to_vec()), None);
-        tokio::spawn(send_outgoing(
+        crate::platform::spawn(send_outgoing(
             client,
             self.commands.clone(),
             chat,

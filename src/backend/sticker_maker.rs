@@ -67,6 +67,12 @@ fn encode(sticker: &image::RgbaImage) -> Result<Vec<u8>, String> {
 }
 
 /// One pass of libwebp's simple lossy encoder, which keeps the alpha channel.
+#[cfg(target_arch = "wasm32")]
+fn encode_at(_sticker: &image::RgbaImage, _quality: f32) -> Result<Vec<u8>, String> {
+    Err("Making stickers is not available in the browser yet".to_owned())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_at(sticker: &image::RgbaImage, quality: f32) -> Result<Vec<u8>, String> {
     let (width, height) = sticker.dimensions();
     let mut output: *mut u8 = std::ptr::null_mut();

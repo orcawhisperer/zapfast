@@ -1,0 +1,9 @@
+[package]
+name = "web-shim-ureq"
+version = "3.0.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Answers 'not available' with the part of ureq's API ZapFast uses: a page cannot block on a request, so the browser build asks fetch instead."
+
+[dependencies]

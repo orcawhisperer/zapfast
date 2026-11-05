@@ -3,11 +3,13 @@
 //! Messages are archived before reaching the UI. Privacy ids (`@lid`) are
 //! canonicalized to phone-number ids as soon as their mapping is known.
 
+use crate::platform::FilePath as _;
+use crate::platform::Instant;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 use whatsapp_rust::download::MediaType;
@@ -34,6 +36,7 @@ use whatsapp_rust::wacore::download::{DownloadWriter, Downloadable};
 use whatsapp_rust::wacore::history_sync::{HistorySyncStream, MAX_DECOMPRESSED};
 use whatsapp_rust::wacore::iq::abprops;
 use whatsapp_rust::wacore::store::DevicePropsOverride;
+use whatsapp_rust::wacore::sync_marker::MaybeSend;
 use whatsapp_rust::wacore_binary::jid::JidExt;
 use whatsapp_rust::waproto::buffa::Message as _;
 use whatsapp_rust::{MediaRetryResult, MediaReuploadRequest};
@@ -140,7 +143,7 @@ async fn with_attachment_deadline<T>(
     duration: Duration,
     operation: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<T, String> {
-    tokio::time::timeout(duration, operation)
+    crate::platform::time::timeout(duration, operation)
         .await
         .unwrap_or_else(|_| Err("Download timed out".to_owned()))
 }
@@ -334,12 +337,12 @@ async fn fetch_attachment(
 async fn stage_attachment(
     path: &Path,
     cache: Option<&Path>,
-) -> Result<(PathBuf, PathBuf, std::fs::File), String> {
+) -> Result<(PathBuf, PathBuf, crate::platform::sfs::File), String> {
     let mut failure = String::new();
     for target in std::iter::once(path).chain(cache.filter(|cache| *cache != path)) {
         let staged = async {
             let dir = target.parent().ok_or("attachment has no parent folder")?;
-            tokio::fs::create_dir_all(dir)
+            crate::platform::fs::create_dir_all(dir)
                 .await
                 .map_err(|error| error.to_string())?;
             temporary_attachment_file(target)
@@ -378,7 +381,7 @@ async fn publish_download(
             let (_, staging, file) = stage_attachment(cache, None).await?;
             let _staged = Staged(staging.clone());
             drop(file);
-            tokio::fs::copy(temporary, &staging)
+            crate::platform::fs::copy(temporary, &staging)
                 .await
                 .map_err(|error| error.to_string())?;
             publish_attachment(&staging, cache).await?;
@@ -392,12 +395,12 @@ async fn publish_attachment(temporary: &Path, path: &Path) -> Result<(), String>
     // Windows does not replace an existing destination during rename. A stale
     // cache file has no archive reference, and active downloads are deduplicated.
     #[cfg(windows)]
-    if path.exists() {
-        tokio::fs::remove_file(path)
+    if path.found() {
+        crate::platform::fs::remove_file(path)
             .await
             .map_err(|error| error.to_string())?;
     }
-    tokio::fs::rename(temporary, path)
+    crate::platform::fs::rename(temporary, path)
         .await
         .map_err(|error| error.to_string())
 }
@@ -409,17 +412,17 @@ async fn publish_attachment(temporary: &Path, path: &Path) -> Result<(), String>
 /// shares) an empty file reserves it first.
 async fn publish_beside(temporary: &Path, path: &Path) -> io::Result<PathBuf> {
     let (temporary, path) = (temporary.to_path_buf(), path.to_path_buf());
-    tokio::task::spawn_blocking(move || {
+    crate::platform::spawn_blocking(move || {
         for candidate in (0..1000).map(|n| numbered_path(&path, n)) {
-            match std::fs::hard_link(&temporary, &candidate) {
+            match crate::platform::sfs::hard_link(&temporary, &candidate) {
                 Ok(()) => {
-                    let _ = std::fs::remove_file(&temporary);
+                    let _ = crate::platform::sfs::remove_file(&temporary);
                     return Ok(candidate);
                 }
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
                 Err(_) => {}
             }
-            match std::fs::OpenOptions::new()
+            match crate::platform::sfs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(&candidate)
@@ -429,11 +432,11 @@ async fn publish_beside(temporary: &Path, path: &Path) -> io::Result<PathBuf> {
                     // Windows renames only onto a free name; the reserved
                     // file is ours to remove.
                     #[cfg(windows)]
-                    std::fs::remove_file(&candidate)?;
-                    return match std::fs::rename(&temporary, &candidate) {
+                    crate::platform::sfs::remove_file(&candidate)?;
+                    return match crate::platform::sfs::rename(&temporary, &candidate) {
                         Ok(()) => Ok(candidate),
                         Err(error) => {
-                            let _ = std::fs::remove_file(&candidate);
+                            let _ = crate::platform::sfs::remove_file(&candidate);
                             Err(error)
                         }
                     };
@@ -476,10 +479,10 @@ fn temporary_attachment_path(path: &Path) -> PathBuf {
 
 /// Creates an exclusive temporary file, retrying a vanishingly unlikely name
 /// collision without ever opening another download's staging file.
-fn temporary_attachment_file(path: &Path) -> Result<(PathBuf, std::fs::File), String> {
+fn temporary_attachment_file(path: &Path) -> Result<(PathBuf, crate::platform::sfs::File), String> {
     for _ in 0..8 {
         let temporary = temporary_attachment_path(path);
-        match std::fs::OpenOptions::new()
+        match crate::platform::sfs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&temporary)
@@ -501,7 +504,7 @@ struct Staged(PathBuf);
 
 impl Drop for Staged {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
+        let _ = crate::platform::sfs::remove_file(&self.0);
     }
 }
 
@@ -521,7 +524,7 @@ pub(crate) fn measure_media(dir: &Path) -> io::Result<crate::model::StorageStats
 pub(crate) fn clear_media(dir: &Path) -> io::Result<()> {
     let mut failed = None;
     walk_media(dir, &mut |path, _| {
-        if let Err(error) = std::fs::remove_file(path) {
+        if let Err(error) = crate::platform::sfs::remove_file(path) {
             failed = Some(error);
         }
         Ok(())
@@ -532,11 +535,11 @@ pub(crate) fn clear_media(dir: &Path) -> io::Result<()> {
 /// Visits every finished file under `dir`, an absent folder being empty.
 fn walk_media(
     dir: &Path,
-    visit: &mut dyn FnMut(&Path, &std::fs::Metadata) -> io::Result<()>,
+    visit: &mut dyn FnMut(&Path, &crate::platform::sfs::Metadata) -> io::Result<()>,
 ) -> io::Result<()> {
     let mut folders = vec![dir.to_path_buf()];
     while let Some(folder) = folders.pop() {
-        let entries = match std::fs::read_dir(&folder) {
+        let entries = match crate::platform::sfs::read_dir(&folder) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
             Err(error) => return Err(error),
@@ -566,7 +569,7 @@ fn is_staging(path: &Path) -> bool {
 
 /// Removes incomplete, unreferenced downloads left by an interrupted process.
 fn discard_attachment_staging(dir: &Path) {
-    let entries = match std::fs::read_dir(dir) {
+    let entries = match crate::platform::sfs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return,
         Err(_) => {
@@ -579,8 +582,8 @@ fn discard_attachment_staging(dir: &Path) {
         let name = name.to_string_lossy();
         if name.starts_with('.')
             && name.ends_with(".part")
-            && entry.path().is_file()
-            && let Err(_) = std::fs::remove_file(entry.path())
+            && entry.path().found_file()
+            && let Err(_) = crate::platform::sfs::remove_file(entry.path())
         {
             log::warn!("could not remove incomplete attachment");
         }
@@ -601,7 +604,7 @@ const PIN_SECS: i64 = 7 * 24 * 60 * 60;
 /// a device it is off for is refused with 427 ("group call not enabled"). Two
 /// flags, no personal data; asked like the pin limit, for want of an event.
 fn spawn_calling_gate_log(client: Arc<Client>) {
-    tokio::spawn(async move {
+    crate::platform::spawn(async move {
         for _ in 0..30 {
             let calling = client
                 .ab_prop_enabled(abprops::web::ENABLE_WEB_CALLING)
@@ -613,7 +616,7 @@ fn spawn_calling_gate_log(client: Arc<Client>) {
                 log::info!("[CALL] web calling enabled={calling} group calling enabled={group}");
                 return;
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            crate::platform::time::sleep(Duration::from_secs(2)).await;
         }
         log::info!("[CALL] web calling flags never arrived");
     });
@@ -626,7 +629,7 @@ fn spawn_pin_limit_check(
     events: std::sync::mpsc::Sender<Event>,
     waker: Waker,
 ) {
-    tokio::spawn(async move {
+    crate::platform::spawn(async move {
         for _ in 0..30 {
             if let Some(plus) = client
                 .ab_prop_enabled(abprops::web::AURA_PINNED_CHATS_BENEFIT_ACTIVE)
@@ -641,7 +644,7 @@ fn spawn_pin_limit_check(
                 waker.wake();
                 return;
             }
-            tokio::time::sleep(Duration::from_secs(2)).await;
+            crate::platform::time::sleep(Duration::from_secs(2)).await;
         }
     });
 }
@@ -861,7 +864,7 @@ pub async fn run(
 ) {
     let archive = loop {
         let path = dirs.archive_db();
-        let opened = tokio::task::spawn_blocking(move || Archive::open(&path)).await;
+        let opened = crate::platform::spawn_blocking(move || Archive::open(&path)).await;
         match opened {
             Ok(Ok(archive)) => break archive,
             result => {
@@ -1103,7 +1106,7 @@ pub async fn run(
     discard_attachment_staging(&worker.dirs.saved_sticker_dir());
     worker.start_bot().await;
     let mut wa_events = wa_events;
-    let mut tick = tokio::time::interval(link_watch::CHECK_INTERVAL);
+    let mut tick = crate::platform::time::interval(link_watch::CHECK_INTERVAL);
     'commands: loop {
         let deadline = worker.sync_deadline;
         // Cloned before the select so its branches never borrow the worker: a live call is the only
@@ -1202,7 +1205,7 @@ pub async fn run(
             } => worker.call_frame(tick),
             _ = async {
                 match deadline {
-                    Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
+                    Some(deadline) => crate::platform::sleep_until(deadline).await,
                     None => std::future::pending::<()>().await,
                 }
             } => {
@@ -1271,13 +1274,13 @@ fn set_aside_unreadable_archive(dirs: &AccountDirs) -> std::io::Result<PathBuf> 
     let archive = dirs.archive_db();
     let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S").to_string();
     let kept = archive.with_file_name(format!("archive-unreadable-{stamp}.db"));
-    std::fs::rename(&archive, &kept)?;
+    crate::platform::sfs::rename(&archive, &kept)?;
     for suffix in ["-wal", "-shm", "-journal"] {
         let mut from = archive.clone().into_os_string();
         from.push(suffix);
         let mut to = kept.clone().into_os_string();
         to.push(suffix);
-        match std::fs::rename(&from, &to) {
+        match crate::platform::sfs::rename(&from, &to) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
             _ => {}
         }
@@ -1286,7 +1289,7 @@ fn set_aside_unreadable_archive(dirs: &AccountDirs) -> std::io::Result<PathBuf> 
     for suffix in ["", "-wal", "-shm", "-journal"] {
         let mut path = session.clone().into_os_string();
         path.push(suffix);
-        match std::fs::remove_file(path) {
+        match crate::platform::sfs::remove_file(path) {
             Err(error) if error.kind() != std::io::ErrorKind::NotFound => return Err(error),
             _ => {}
         }
@@ -1577,7 +1580,7 @@ struct Worker {
     /// That read is running.
     link_previews_reading: bool,
     /// The composer's page fetch in flight; a newer request aborts it.
-    preview_fetch: Option<tokio::task::JoinHandle<()>>,
+    preview_fetch: Option<crate::platform::JoinHandle<()>>,
     /// The stored phone setting could not be read at startup; it is read
     /// again when needed, and chats stay archived until it is.
     phone_unarchive_unread: bool,
@@ -1991,13 +1994,13 @@ impl Worker {
     /// Syncs a chat setting to the phone without blocking the worker.
     fn tell_phone<F, Fut>(&self, chat: &str, call: F)
     where
-        F: FnOnce(Arc<Client>, Jid) -> Fut + Send + 'static,
-        Fut: std::future::Future<Output = Result<(), String>> + Send + 'static,
+        F: FnOnce(Arc<Client>, Jid) -> Fut + MaybeSend + 'static,
+        Fut: std::future::Future<Output = Result<(), String>> + MaybeSend + 'static,
     {
         let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(chat)) else {
             return;
         };
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             if call(client, jid).await.is_err() {
                 log::warn!("could not synchronize a chat preference");
             }
@@ -2059,7 +2062,7 @@ impl Worker {
         let participant = (jid.is_group() && !from_me)
             .then(|| target.sender.clone())
             .and_then(|sender| Self::jid_of(&sender));
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let actions = client.chat_actions();
             let target = whatsapp_rust::MessageId::new(&id).and_then(|message_id| {
                 whatsapp_rust::MessageRef::new(&jid, message_id, participant.as_ref(), from_me)
@@ -2128,7 +2131,7 @@ impl Worker {
             if !path.starts_with(&cache) {
                 continue;
             }
-            if let Err(error) = std::fs::remove_file(path)
+            if let Err(error) = crate::platform::sfs::remove_file(path)
                 && error.kind() != std::io::ErrorKind::NotFound
             {
                 log::warn!("could not remove a cached attachment");
@@ -2433,7 +2436,7 @@ impl Worker {
         };
         log::info!("link: the machine woke up, reconnecting");
         self.set_status(LinkStatus::Connecting);
-        tokio::spawn(async move { client.reconnect_immediately().await });
+        crate::platform::spawn(async move { client.reconnect_immediately().await });
     }
 
     /// Reconnects a link that the machine slept under (macOS, where the
@@ -2448,7 +2451,7 @@ impl Worker {
         let frames = client.as_ref().map(|client| client.stats().frames_received);
         let verdict = self.link_watch.check(
             Instant::now(),
-            std::time::SystemTime::now(),
+            crate::platform::SystemTime::now(),
             frames,
             client
                 .as_ref()
@@ -2476,7 +2479,7 @@ impl Worker {
             }
         }
         self.set_status(LinkStatus::Connecting);
-        tokio::spawn(async move { client.reconnect_immediately().await });
+        crate::platform::spawn(async move { client.reconnect_immediately().await });
     }
 
     fn set_syncing(&mut self, syncing: bool) {
@@ -2551,7 +2554,7 @@ impl Worker {
     fn measure_storage(&mut self, token: u64, clear: bool) {
         let dir = self.dirs.media_cache_dir();
         let commands = self.commands.clone();
-        tokio::task::spawn_blocking(move || {
+        crate::platform::spawn_blocking(move || {
             if clear && clear_media(&dir).is_err() {
                 log::warn!("could not delete every cached attachment");
             }
@@ -2573,7 +2576,7 @@ impl Worker {
     /// The file of this name in the media cache, if the attachment has one.
     fn cached_copy(&self, path: &Path) -> Option<PathBuf> {
         let name = path.file_name()?;
-        Some(self.dirs.media_cache_dir().join(name)).filter(|copy| copy.exists())
+        Some(self.dirs.media_cache_dir().join(name)).filter(|copy| copy.found())
     }
 
     /// Mends one attachment the reader failed to open, as `relocate_media`
@@ -2581,7 +2584,7 @@ impl Worker {
     /// counts, and only if it is really gone: a newer download stays.
     fn attachment_missing(&mut self, chat: &str, id: &str, card: Option<usize>, path: &Path) {
         if !self.privacy_ready
-            || !matches!(path.try_exists(), Ok(false))
+            || !matches!(path.checked_found(), Ok(false))
             || !matches!(
                 self.archive.message(chat, id),
                 Ok(Some(row)) if row.content.place_of_file(path) == Some(card)
@@ -2623,13 +2626,13 @@ impl Worker {
         };
         // A clip lives only in the cache: one that is gone downloads again.
         for (chat, id, path) in self.archive.motion_paths().unwrap_or_default() {
-            if !path.exists() {
+            if !path.found() {
                 let _ = self.archive.put_motion_path(&chat, &id, None);
             }
         }
         let (mut moved, mut forgotten) = (0, 0);
         for (chat, id, card, path) in rows {
-            if path.exists() {
+            if path.found() {
                 continue;
             }
             match self.cached_copy(&path) {
@@ -3108,7 +3111,7 @@ impl Worker {
     async fn start_bot(&mut self) {
         let path = self.dirs.session_db();
         if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = crate::platform::sfs::create_dir_all(parent);
         }
         let store = match device_store::open(&path).await {
             Ok(store) => store,
@@ -3126,6 +3129,12 @@ impl Worker {
                 abprops::web::ENABLE_WEB_CALLING,
                 abprops::web::ENABLE_WEB_GROUP_CALLING,
             ]);
+        #[cfg(target_arch = "wasm32")]
+        let builder = builder
+            .with_transport_factory(crate::web::transport::WebSocketFactory)
+            .with_http_client(crate::web::http::FetchClient)
+            .with_runtime(crate::web::runtime::WebRuntime);
+        #[cfg(not(target_arch = "wasm32"))]
         let builder = match crate::proxy::for_whatsapp() {
             Some(proxy) => {
                 log::info!("connecting through the proxy {}", proxy.redacted());
@@ -3236,7 +3245,7 @@ impl Worker {
         self.presence_in_flight = true;
         let generation = self.presence_generation;
         let sender = self.wa_sender.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let presence = client.presence();
             let result = if online {
                 presence.set_available().await
@@ -3313,7 +3322,7 @@ impl Worker {
         if self.privacy_snapshot {
             collections.push(whatsapp_rust::WAPatchName::RegularHigh);
         }
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             use whatsapp_rust::WAPatchName;
             let (locks, complete) = match client.resync_app_state(collections, mode).await {
                 Ok(report) => {
@@ -3446,7 +3455,7 @@ impl Worker {
         self.awaiting_ack.clear();
         self.early_acks.clear();
         if let Some(handle) = self.handle.take()
-            && tokio::time::timeout(Duration::from_secs(5), handle.shutdown())
+            && crate::platform::time::timeout(Duration::from_secs(5), handle.shutdown())
                 .await
                 .is_err()
         {
@@ -3660,7 +3669,7 @@ impl Worker {
             return;
         };
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             match client.set_privacy_setting(category, value).await {
                 Ok(_) => {
                     let _ = commands.send(Command::AccountPrivacySaved { kind });
@@ -3931,7 +3940,7 @@ impl Worker {
             .flatten()
             .collect();
         let lids = self.lid_to_pn.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             match client.groups().fetch_metadata(&jid).await {
                 Ok(metadata) => {
                     let (participants, admin) =
@@ -4134,7 +4143,7 @@ impl Worker {
                     let followed = client.clone();
                     self.channel_list_generation = self.channel_list_generation.wrapping_add(1);
                     let generation = self.channel_list_generation;
-                    tokio::spawn(async move {
+                    crate::platform::spawn(async move {
                         // A channel's Mute lives on the channel, not in the
                         // chat's app state, so read it from the server.
                         match followed.newsletter().list_subscribed().await {
@@ -4172,7 +4181,7 @@ impl Worker {
                             }
                         }
                     });
-                    tokio::spawn(async move {
+                    crate::platform::spawn(async move {
                         publish_account_privacy(&client, &commands).await;
                         if let Some(me) = me {
                             match client
@@ -4589,7 +4598,7 @@ impl Worker {
         let commands = self.commands.clone();
         let events = self.events.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let profile = client.profile();
             let mut saved_name = None;
             if let Some(name) = name {
@@ -4716,10 +4725,10 @@ impl Worker {
         for suffix in ["", "-wal", "-shm", "-journal"] {
             let mut path = session.clone().into_os_string();
             path.push(suffix);
-            let _ = std::fs::remove_file(path);
+            let _ = crate::platform::sfs::remove_file(path);
         }
-        let _ = std::fs::remove_dir_all(self.dirs.avatar_cache_dir());
-        let _ = std::fs::remove_dir_all(self.dirs.media_cache_dir());
+        let _ = crate::platform::sfs::remove_dir_all(self.dirs.avatar_cache_dir());
+        let _ = crate::platform::sfs::remove_dir_all(self.dirs.media_cache_dir());
         self.emit(Event::Chats(Vec::new()));
         self.emit_labels();
         self.emit(Event::Drafts(Vec::new()));
@@ -6192,7 +6201,7 @@ impl Worker {
             }
         }
         let compressed = lazy.compressed_bytes().clone();
-        let parsed = tokio::task::spawn_blocking(move || parse_history(&compressed)).await;
+        let parsed = crate::platform::spawn_blocking(move || parse_history(&compressed)).await;
         match parsed {
             Ok(Ok(parsed)) => {
                 if on_demand {
@@ -6994,7 +7003,7 @@ impl Worker {
             },
         );
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             match client
                 // Despite its `Ms` name, the protocol field takes Unix seconds.
                 // https://github.com/tulir/whatsmeow/commit/54650307d891f89ab346a57953d316106caee371
@@ -7129,7 +7138,7 @@ impl Worker {
         };
         let commands = self.commands.clone();
         let generation = self.contact_generation;
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let error = client
                 .chat_actions()
                 .save_contact(&jid, Some(full_name.clone()), first_name.clone(), to_phone)
@@ -7300,8 +7309,8 @@ impl Worker {
             }
             // Stores the open chat's unsent text, or clears it when empty.
             Command::SaveDraft { chat, text } => {
-                let at = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
+                let at = crate::platform::SystemTime::now()
+                    .duration_since(crate::platform::UNIX_EPOCH)
                     .map(|elapsed| elapsed.as_secs() as i64)
                     .unwrap_or_default();
                 if let Err(error) = self.archive.set_draft(&chat, &text, at) {
@@ -7312,7 +7321,7 @@ impl Worker {
                 let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat)) else {
                     return;
                 };
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     let result = if composing {
                         client.chatstate().send_composing(&jid).await
                     } else {
@@ -7519,8 +7528,8 @@ impl Worker {
             }
             Command::PickFiles { chat, documents } => {
                 let commands = self.commands.clone();
-                tokio::task::spawn_blocking(move || {
-                    let paths = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    let paths = crate::platform::FileDialog::new()
                         .set_title("Send to WhatsApp")
                         .pick_files()
                         .unwrap_or_default();
@@ -7618,7 +7627,7 @@ impl Worker {
             Command::ImportStickerUrl { url } => {
                 let commands = self.commands.clone();
                 let packs = self.packs_dir();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let result = super::sticker_import::import_signal_pack(&url, &packs);
                     let _ = commands.send(Command::StickerPackImported { result });
                 });
@@ -7656,8 +7665,8 @@ impl Worker {
             Command::PickChatSound(chat) => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Some(path) = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    if let Some(path) = crate::platform::FileDialog::new()
                         .set_title("Choose a notification sound")
                         .add_filter("Audio", &["wav", "mp3", "ogg", "oga"])
                         .pick_file()
@@ -7670,8 +7679,8 @@ impl Worker {
             Command::PickDownloadFolder => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Some(path) = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    if let Some(path) = crate::platform::FileDialog::new()
                         .set_title("Choose a folder for downloads")
                         .pick_folder()
                     {
@@ -7684,8 +7693,8 @@ impl Worker {
                 let dirs = self.dirs.clone();
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let Some(path) = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    let Some(path) = crate::platform::FileDialog::new()
                         .set_title("Choose a wallpaper image")
                         .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
                         .pick_file()
@@ -7703,8 +7712,8 @@ impl Worker {
                 let commands = self.commands.clone();
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let Some(path) = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    let Some(path) = crate::platform::FileDialog::new()
                         .set_title("Choose a profile picture")
                         .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
                         .pick_file()
@@ -7733,7 +7742,7 @@ impl Worker {
                 let commands = self.commands.clone();
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     match client.profile().set_profile_picture(bytes).await {
                         Ok(_) => {
                             let _ = commands.send(Command::ProfileSaved {
@@ -7775,8 +7784,8 @@ impl Worker {
                 let commands = self.commands.clone();
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let Some(path) = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    let Some(path) = crate::platform::FileDialog::new()
                         .set_title("Choose a group photo")
                         .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
                         .pick_file()
@@ -7847,8 +7856,8 @@ impl Worker {
                 }
                 if picture {
                     let me = self.me();
-                    let _ = std::fs::remove_file(self.avatar_file(&me, false));
-                    let _ = std::fs::remove_file(self.avatar_file(&me, true));
+                    let _ = crate::platform::sfs::remove_file(self.avatar_file(&me, false));
+                    let _ = crate::platform::sfs::remove_file(self.avatar_file(&me, true));
                     self.fetch_avatar(me.clone(), false);
                     self.fetch_avatar(me, true);
                 }
@@ -7857,8 +7866,8 @@ impl Worker {
             Command::PickNotificationSound { mention } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    if let Some(path) = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    if let Some(path) = crate::platform::FileDialog::new()
                         .set_title("Choose a notification sound")
                         .add_filter("Audio", &["wav", "mp3", "ogg", "oga"])
                         .pick_file()
@@ -7871,8 +7880,8 @@ impl Worker {
             Command::SaveAttachmentAs { source, name } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let mut dialog = rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    let mut dialog = crate::platform::FileDialog::new()
                         .set_title("Save attachment")
                         .set_file_name(&name);
                     if let Some(downloads) = directories::UserDirs::new()
@@ -7884,7 +7893,7 @@ impl Worker {
                     let Some(target) = dialog.save_file() else {
                         return;
                     };
-                    let event = match std::fs::copy(&source, &target) {
+                    let event = match crate::platform::sfs::copy(&source, &target) {
                         Ok(_) => Event::Info(format!(
                             "Saved {}",
                             target.file_name().map_or_else(
@@ -7909,7 +7918,7 @@ impl Worker {
             Command::OpenLog(path) => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     if let Err(error) = crate::opener::open_or_reveal(&path) {
                         let _ = events.send(Event::Error(error));
                         waker.wake();
@@ -7919,8 +7928,8 @@ impl Worker {
             Command::SaveAttachments { files } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
-                    let mut dialog = rfd::FileDialog::new().set_title("Save album");
+                crate::platform::spawn_blocking(move || {
+                    let mut dialog = crate::platform::FileDialog::new().set_title("Save album");
                     if let Some(downloads) = directories::UserDirs::new()
                         .and_then(|dirs| dirs.download_dir().map(Path::to_path_buf))
                     {
@@ -7953,7 +7962,7 @@ impl Worker {
             Command::PrepareClipboardImage(path) => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let result = image::open(&path)
                         .map_err(|error| error.to_string())
                         .map(|img| {
@@ -7971,13 +7980,13 @@ impl Worker {
             }
             Command::PickStickerPicture => {
                 let commands = self.commands.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result = match rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    let result = match crate::platform::FileDialog::new()
                         .set_title("Make a sticker")
                         .add_filter("Pictures", &["png", "jpg", "jpeg", "webp", "gif"])
                         .pick_file()
                     {
-                        Some(path) => std::fs::read(&path)
+                        Some(path) => crate::platform::sfs::read(&path)
                             .map_err(|error| error.to_string())
                             .and_then(|bytes| super::sticker_maker::inspect(&bytes))
                             .map(|(width, height, transparent)| (path, width, height, transparent)),
@@ -8007,17 +8016,19 @@ impl Worker {
             } => {
                 let commands = self.commands.clone();
                 let dir = self.dirs.sticker_cache_dir().join("made");
-                tokio::task::spawn_blocking(move || {
-                    let result = std::fs::read(&source)
+                crate::platform::spawn_blocking(move || {
+                    let result = crate::platform::sfs::read(&source)
                         .map_err(|error| error.to_string())
                         .and_then(|bytes| {
                             super::sticker_maker::make(&bytes, crop, transparent, &emojis)
                         })
                         .and_then(|sticker| {
-                            std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+                            crate::platform::sfs::create_dir_all(&dir)
+                                .map_err(|error| error.to_string())?;
                             let hash = super::sticker_store::content_hash(&sticker);
                             let path = dir.join(format!("{hash}.webp"));
-                            std::fs::write(&path, sticker).map_err(|error| error.to_string())?;
+                            crate::platform::sfs::write(&path, sticker)
+                                .map_err(|error| error.to_string())?;
                             Ok(path)
                         });
                     let _ = commands.send(Command::StickerMade {
@@ -8048,7 +8059,7 @@ impl Worker {
                 rgba,
             } => {
                 let commands = self.commands.clone();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let image = super::picture_edit::preview(width, height, &rgba);
                     let _ = commands.send(Command::PicturePreviewReady { target, image });
                 });
@@ -8058,8 +8069,8 @@ impl Worker {
             }
             Command::InspectPicture { target, path } => {
                 let commands = self.commands.clone();
-                tokio::task::spawn_blocking(move || {
-                    let result = std::fs::read(&path)
+                crate::platform::spawn_blocking(move || {
+                    let result = crate::platform::sfs::read(&path)
                         .map_err(|error| error.to_string())
                         .and_then(|bytes| super::picture_edit::inspect(&bytes));
                     let _ = commands.send(Command::PictureInspected { target, result });
@@ -8078,7 +8089,7 @@ impl Worker {
             } => {
                 let commands = self.commands.clone();
                 let dir = self.dirs.media_cache_dir().join("edited");
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let result =
                         super::picture_edit::write(&source, width, height, crop, turns, &dir);
                     let _ = commands.send(Command::PictureEdited { target, result });
@@ -8090,8 +8101,8 @@ impl Worker {
             Command::PickStickerArchive => {
                 let commands = self.commands.clone();
                 let packs = self.packs_dir();
-                tokio::task::spawn_blocking(move || {
-                    let result = match rfd::FileDialog::new()
+                crate::platform::spawn_blocking(move || {
+                    let result = match crate::platform::FileDialog::new()
                         .set_title("Add a sticker pack")
                         .add_filter("Sticker packs", &["wastickers", "zip"])
                         .pick_file()
@@ -8164,7 +8175,7 @@ impl Worker {
                 let commands = self.commands.clone();
                 let jid = Jid::pn(&phone);
                 let generation = self.contact_generation;
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     // Use WhatsApp's registration check before opening the chat.
                     let registered = client
                         .contacts()
@@ -8231,7 +8242,10 @@ impl Worker {
             },
             Command::DeleteStickerPack { dir } => {
                 let root = self.packs_dir();
-                if dir.starts_with(&root) && dir != root && std::fs::remove_dir_all(&dir).is_ok() {
+                if dir.starts_with(&root)
+                    && dir != root
+                    && crate::platform::sfs::remove_dir_all(&dir).is_ok()
+                {
                     self.emit_stickers();
                 }
             }
@@ -8260,7 +8274,7 @@ impl Worker {
             } => {
                 let commands = self.commands.clone();
                 let dir = self.dirs.cache.join("gifs");
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let results = search_gifs(&query, &key, &dir, offset);
                     let _ = commands.send(Command::GifResults {
                         query,
@@ -8273,10 +8287,10 @@ impl Worker {
             Command::FetchGifAnimation { id, url, extension } => {
                 let commands = self.commands.clone();
                 let dir = self.dirs.cache.join("gifs");
-                tokio::task::spawn_blocking(move || {
-                    let _ = std::fs::create_dir_all(&dir);
+                crate::platform::spawn_blocking(move || {
+                    let _ = crate::platform::sfs::create_dir_all(&dir);
                     let path = gif_path(&dir, &id, &extension);
-                    let path = if path.exists() {
+                    let path = if path.found() {
                         Some(path)
                     } else {
                         fetch_gif(&url, &path)
@@ -8293,7 +8307,7 @@ impl Worker {
             Command::FetchAccountPrivacy => {
                 if let Some(client) = self.client.clone() {
                     let commands = self.commands.clone();
-                    tokio::spawn(async move {
+                    crate::platform::spawn(async move {
                         publish_account_privacy(&client, &commands).await;
                     });
                 }
@@ -8319,7 +8333,7 @@ impl Worker {
                 };
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     let result = client
                         .groups()
                         .get_invite_info(&code)
@@ -8347,7 +8361,7 @@ impl Worker {
                     return;
                 };
                 let commands = self.commands.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     use whatsapp_rust::JoinGroupResult;
                     let result = match client.groups().join_with_invite_code(&code).await {
                         Ok(JoinGroupResult::Joined(jid)) => Ok((jid.to_string(), false)),
@@ -8371,7 +8385,7 @@ impl Worker {
             Command::InspectUpdate => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let result = crate::updates::updater()
                         .map_err(|error| format!("{error:#}"))
                         .and_then(|updater| {
@@ -8384,7 +8398,7 @@ impl Worker {
             Command::DownloadUpdate { release, source } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let result = crate::updates::updater()
                         .and_then(|updater| {
                             updater
@@ -8406,7 +8420,7 @@ impl Worker {
             } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     let result = crate::updates::updater()
                         .and_then(|updater| updater.handoff(*prepared, arguments))
                         .map_err(|error| format!("{error:#}"));
@@ -8417,7 +8431,7 @@ impl Worker {
             Command::CheckForUpdates => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                tokio::task::spawn_blocking(move || {
+                crate::platform::spawn_blocking(move || {
                     match crate::updates::updater().and_then(|updater| updater.check()) {
                         Ok(Some(release)) => {
                             let _ = events.send(Event::UpdateAvailable {
@@ -8551,7 +8565,7 @@ impl Worker {
                 let through = clear_boundary(self.archive.messages(&chat, None, 1))
                     .unwrap_or_else(crate::util::now);
                 let commands = self.commands.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     let deleted = client
                         .chat_actions()
                         .delete_chat(
@@ -8605,7 +8619,7 @@ impl Worker {
                     return;
                 };
                 let commands = self.commands.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     let cleared = client
                         .chat_actions()
                         .clear_chat_with_options(
@@ -8811,7 +8825,7 @@ impl Worker {
                 let status = self.unlinked();
                 self.set_status(status);
                 let commands = self.commands.clone();
-                tokio::spawn(async move {
+                crate::platform::spawn(async move {
                     let result = client
                         .pair_with_code(PairCodeOptions {
                             phone_number: phone,
@@ -8855,7 +8869,7 @@ impl Worker {
                 // A link that does not answer must not keep the account:
                 // the folders go once the backend stops either way.
                 if let Some(client) = self.client.clone()
-                    && tokio::time::timeout(Duration::from_secs(15), client.logout())
+                    && crate::platform::time::timeout(Duration::from_secs(15), client.logout())
                         .await
                         .is_err()
                 {
@@ -8866,7 +8880,7 @@ impl Worker {
             }
             Command::Reconnect => {
                 if let Some(client) = self.client.clone() {
-                    tokio::spawn(async move { client.reconnect_immediately().await });
+                    crate::platform::spawn(async move { client.reconnect_immediately().await });
                 } else {
                     self.start_bot().await;
                 }
@@ -9112,7 +9126,7 @@ impl Worker {
         let session = self.account_session;
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = client
                 .groups()
                 .set_subject(jid, subject)
@@ -9165,7 +9179,7 @@ impl Worker {
         let session = self.account_session;
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = client
                 .groups()
                 .set_description(jid, text, whatsapp_rust::PreviousDescription::Resolve)
@@ -9203,7 +9217,7 @@ impl Worker {
         let session = self.account_session;
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let removed = jpeg.is_none();
             let result = match jpeg {
                 Some(jpeg) => client.groups().set_profile_picture(jid, jpeg).await,
@@ -9557,7 +9571,7 @@ impl Worker {
             thumbnail,
         };
         self.store_message(row, Some(message.encode_to_vec()), None);
-        tokio::spawn(send_outgoing(
+        crate::platform::spawn(send_outgoing(
             client,
             self.commands.clone(),
             chat,
@@ -9615,7 +9629,7 @@ impl Worker {
         }
         let events = self.events.clone();
         let waker = self.waker.clone();
-        self.preview_fetch = Some(tokio::spawn(async move {
+        self.preview_fetch = Some(crate::platform::spawn(async move {
             let preview = link_preview::fetch(url.clone()).await;
             let _ = events.send(Event::LinkPreview { url, preview });
             waker.wake();
@@ -9675,7 +9689,7 @@ impl Worker {
             thumbnail: None,
         };
         self.store_message(row, Some(message.encode_to_vec()), None);
-        tokio::spawn(send_outgoing(
+        crate::platform::spawn(send_outgoing(
             client,
             self.commands.clone(),
             chat,
@@ -9758,7 +9772,7 @@ impl Worker {
             // A batch is already going: these follow it, in order.
             return;
         };
-        tokio::spawn(send_outgoing(
+        crate::platform::spawn(send_outgoing(
             client,
             self.commands.clone(),
             to_chat,
@@ -9784,7 +9798,7 @@ impl Worker {
             return;
         };
         let (to_chat, jid, message, expiration) = job;
-        tokio::spawn(send_outgoing(
+        crate::platform::spawn(send_outgoing(
             client,
             self.commands.clone(),
             to_chat,
@@ -9996,7 +10010,7 @@ impl Worker {
             }
             let client = client.clone();
             let commands = self.commands.clone();
-            tokio::spawn(async move {
+            crate::platform::spawn(async move {
                 // This update is private to our devices, even with blue ticks
                 // disabled. Keep the original position when retrying offline
                 // reads, not the latest message received since the local read.
@@ -10032,7 +10046,7 @@ impl Worker {
             }
             let client = client.clone();
             let commands = self.commands.clone();
-            tokio::spawn(async move {
+            crate::platform::spawn(async move {
                 let range = whatsapp_rust::message_range(through, None, Vec::new());
                 let result = client
                     .chat_actions()
@@ -10067,7 +10081,7 @@ impl Worker {
             .collect();
         let batches = read_receipt_batches(jid.is_group(), ids);
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             if !receipts_allowed(&client, &jid, &commands).await {
                 return;
             }
@@ -10135,7 +10149,7 @@ impl Worker {
             && self.presence_subscribed.insert(chat.clone())
             && let (Some(client), Some(jid)) = (self.client.clone(), Self::jid_of(&chat))
         {
-            tokio::spawn(async move {
+            crate::platform::spawn(async move {
                 if let Err(error) = client.presence().subscribe(jid).await {
                     log::debug!("presence not subscribed: {error}");
                 }
@@ -10345,7 +10359,7 @@ impl Worker {
                 },
             )
         });
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let cache_id = card.map_or_else(|| id.clone(), |index| format!("{id}-card-{index}"));
             let cache_path = media_path(&cache, &chat, &cache_id, &mime, file_name.as_deref());
             let named = file_name
@@ -10468,7 +10482,7 @@ impl Worker {
         };
         let dir = self.dirs.media_cache_dir();
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let path = media_path(&dir, &chat, &format!("{id}-motion"), "video/mp4", None);
             let result = with_attachment_deadline(
                 attachment_deadline(video.file_length),
@@ -10609,7 +10623,7 @@ impl Worker {
             let commands = self.commands.clone();
             let dir = dir.clone();
             let hash = sticker.hash;
-            tokio::spawn(async move {
+            crate::platform::spawn(async move {
                 // The shelf waits for the whole batch, so none may hang.
                 let deadline = attachment_deadline(meta.file_length);
                 let result = with_attachment_deadline(deadline, async {
@@ -10671,8 +10685,8 @@ impl Worker {
     /// Drops the cached pictures of a chat whose picture changed, and fetches
     /// the new one unless it was removed.
     fn refresh_avatar(&mut self, id: String, removed: bool) {
-        let _ = std::fs::remove_file(self.avatar_file(&id, false));
-        let _ = std::fs::remove_file(self.avatar_file(&id, true));
+        let _ = crate::platform::sfs::remove_file(self.avatar_file(&id, false));
+        let _ = crate::platform::sfs::remove_file(self.avatar_file(&id, true));
         if removed {
             self.emit(Event::Avatar {
                 id: id.clone(),
@@ -10699,11 +10713,11 @@ impl Worker {
             let path = self.avatar_file(&id, full);
             let written = path
                 .parent()
-                .map_or(Ok(()), std::fs::create_dir_all)
-                .and_then(|()| std::fs::write(&path, &jpeg));
+                .map_or(Ok(()), crate::platform::sfs::create_dir_all)
+                .and_then(|()| crate::platform::sfs::write(&path, &jpeg));
             if written.is_err() {
                 // The server has it either way.
-                let _ = std::fs::remove_file(&path);
+                let _ = crate::platform::sfs::remove_file(&path);
                 self.fetch_avatar(id.clone(), full);
                 continue;
             }
@@ -10717,7 +10731,7 @@ impl Worker {
 
     fn fetch_avatar(&mut self, id: String, full: bool) {
         let path = self.avatar_file(&id, full);
-        if let Ok(metadata) = std::fs::metadata(&path)
+        if let Ok(metadata) = crate::platform::sfs::metadata(&path)
             && metadata
                 .modified()
                 .ok()
@@ -10766,7 +10780,7 @@ impl Worker {
             return;
         };
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let fetched = async {
                 let mut picture = None;
                 let mut failed = false;
@@ -11027,7 +11041,7 @@ impl Worker {
             };
         let generation = self.begin_edit(&chat, &id);
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let accepted = client
                 .edit_message_raw(
                     jid,
@@ -11189,7 +11203,7 @@ impl Worker {
         self.message_removals_in_flight
             .insert((chat.clone(), id.clone()));
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let target = whatsapp_rust::MessageId::new(&id).and_then(|message_id| {
                 whatsapp_rust::MessageRef::new(
                     &jid,
@@ -11345,7 +11359,7 @@ impl Worker {
             self.media_changed(&chat, old.as_ref().map(|old| &old.content), None);
         }
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             if let Err(error) = client.revoke_message_raw(jid, id, RevokeType::Sender).await {
                 let _ = commands.send(Command::Sent {
                     chat,
@@ -11451,9 +11465,9 @@ impl Worker {
                 chat.clone(),
                 name,
             );
-            tokio::spawn(async move {
+            crate::platform::spawn(async move {
                 let outcome = async {
-                    let bytes = tokio::fs::read(&path)
+                    let bytes = crate::platform::fs::read(&path)
                         .await
                         .map_err(|error| format!("{}: {error}", path.display()))?;
                     let mime = mime_guess2::from_path(&path)
@@ -11574,9 +11588,9 @@ impl Worker {
             chat.clone(),
             String::new(),
         );
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let outcome = async {
-                let encoded = tokio::task::spawn_blocking(move || {
+                let encoded = crate::platform::spawn_blocking(move || {
                     let image = image::RgbaImage::from_raw(width, height, rgba)
                         .ok_or_else(|| "Clipboard image data is invalid".to_owned())?;
                     encode_jpeg(&image::DynamicImage::ImageRgba8(image), 88)
@@ -11653,9 +11667,9 @@ impl Worker {
         let commands = self.commands.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let outcome = async {
-                let (bytes, seconds, waveform) = tokio::task::spawn_blocking(move || {
+                let (bytes, seconds, waveform) = crate::platform::spawn_blocking(move || {
                     let mut samples = samples;
                     crate::voice::normalize(&mut samples);
                     let seconds = (samples.len() as f64 / f64::from(crate::voice::RATE))
@@ -11711,7 +11725,7 @@ impl Worker {
         };
         let to = list.unwrap_or_else(|| jid.clone());
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             if !played_receipt_allowed(&client, &jid, &commands).await {
                 return;
             }
@@ -11745,9 +11759,9 @@ impl Worker {
         let commands = self.commands.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let outcome = async {
-                let bytes = tokio::fs::read(&path)
+                let bytes = crate::platform::fs::read(&path)
                     .await
                     .map_err(|error| error.to_string())?;
                 let prepared = prepare_sticker(&client, bytes).await?;
@@ -11790,10 +11804,10 @@ impl Worker {
         let commands = self.commands.clone();
         let dir = self.dirs.media_cache_dir();
         let me = self.me();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let outcome = async {
                 let url = gif.mp4.clone();
-                let bytes = tokio::task::spawn_blocking(move || {
+                let bytes = crate::platform::spawn_blocking(move || {
                     crate::proxy::agent()
                         .get(&url)
                         .call()
@@ -11865,7 +11879,7 @@ impl Worker {
         let raw = attachment_archive_raw(&message);
         let id = row.id.clone();
         self.store_message(row, Some(raw), None);
-        tokio::spawn(send_outgoing(
+        crate::platform::spawn(send_outgoing(
             client,
             self.commands.clone(),
             chat,
@@ -11897,7 +11911,7 @@ impl Worker {
             proto.participant = (jid.is_group() && !target.from_me).then(|| target.sender.clone());
             proto
         };
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             if client.send_reaction_raw(jid, key, &emoji).await.is_err() {
                 log::warn!("could not send a reaction");
             }
@@ -11958,7 +11972,7 @@ impl Worker {
             .then(|| target.sender.clone())
             .and_then(|sender| Self::jid_of(&sender));
         let expires_at = now + PIN_SECS;
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let target = whatsapp_rust::MessageId::new(&id).and_then(|message_id| {
                 whatsapp_rust::MessageRef::new(&jid, message_id, participant.as_ref(), from_me)
             });
@@ -12365,7 +12379,7 @@ fn save_album_copy(source: &Path, folder: &Path, name: &str) -> std::io::Result<
         .extension()
         .map(|value| format!(".{}", value.to_string_lossy()))
         .unwrap_or_default();
-    let mut input = std::fs::File::open(source)?;
+    let mut input = crate::platform::sfs::File::open(source)?;
     let mut number = 1usize;
     loop {
         let target = if number == 1 {
@@ -12373,7 +12387,7 @@ fn save_album_copy(source: &Path, folder: &Path, name: &str) -> std::io::Result<
         } else {
             folder.join(format!("{stem} ({number}){extension}"))
         };
-        match std::fs::OpenOptions::new()
+        match crate::platform::sfs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&target)
@@ -12381,7 +12395,7 @@ fn save_album_copy(source: &Path, folder: &Path, name: &str) -> std::io::Result<
             Ok(mut output) => {
                 if let Err(error) = std::io::copy(&mut input, &mut output) {
                     drop(output);
-                    let _ = std::fs::remove_file(&target);
+                    let _ = crate::platform::sfs::remove_file(&target);
                     return Err(error);
                 }
                 return Ok(target);
@@ -13190,13 +13204,13 @@ fn encode_jpeg(image: &image::DynamicImage, quality: u8) -> Result<Vec<u8>, Stri
 /// The picture already on disk, however old. An empty file stands for a
 /// person known to have none.
 fn last_avatar(path: &Path) -> Option<PathBuf> {
-    std::fs::metadata(path)
+    crate::platform::sfs::metadata(path)
         .is_ok_and(|metadata| metadata.len() > 0)
         .then(|| path.to_path_buf())
 }
 
 async fn download_avatar(url: String, path: PathBuf) -> Result<PathBuf, String> {
-    let bytes = tokio::task::spawn_blocking(move || {
+    let bytes = crate::platform::spawn_blocking(move || {
         crate::proxy::agent()
             .get(&url)
             .call()
@@ -13206,11 +13220,11 @@ async fn download_avatar(url: String, path: PathBuf) -> Result<PathBuf, String> 
     .await
     .map_err(|error| error.to_string())??;
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
+        crate::platform::fs::create_dir_all(parent)
             .await
             .map_err(|error| error.to_string())?;
     }
-    tokio::fs::write(&path, &bytes)
+    crate::platform::fs::write(&path, &bytes)
         .await
         .map_err(|error| error.to_string())?;
     Ok(path)
@@ -13377,7 +13391,7 @@ async fn upload_media(
         return Err(UPLOAD_CANCELLED.to_owned());
     }
     let file_length = bytes.len() as u64;
-    let encrypted = tokio::task::spawn_blocking(move || {
+    let encrypted = crate::platform::spawn_blocking(move || {
         whatsapp_rust::wacore::upload::encrypt_media_with_key_and_sidecar(
             &bytes, media_type, None, None,
         )
@@ -13479,7 +13493,7 @@ async fn prepare_media(
         "image/jpeg" | "image/png" | "image/webp" | "image/bmp" | "image/tiff"
     );
     if is_picture {
-        let decoded = tokio::task::spawn_blocking({
+        let decoded = crate::platform::spawn_blocking({
             let bytes = bytes.clone();
             move || image::load_from_memory(&bytes).map_err(|error| error.to_string())
         })
@@ -13527,7 +13541,7 @@ async fn prepare_media(
         // Reading a second of frames takes a moment, so off the runtime.
         let poster = {
             let bytes = bytes.clone();
-            tokio::task::spawn_blocking(move || crate::animation::poster(&bytes))
+            crate::platform::spawn_blocking(move || crate::animation::poster(&bytes))
                 .await
                 .ok()
                 .flatten()
@@ -13636,7 +13650,7 @@ async fn prepare_document(
 
 /// Uploads a WebP sticker and builds its message without a library builder.
 async fn prepare_sticker(client: &Client, bytes: Vec<u8>) -> Result<Prepared, String> {
-    let (animated, width, height) = tokio::task::spawn_blocking({
+    let (animated, width, height) = crate::platform::spawn_blocking({
         let bytes = bytes.clone();
         move || {
             let decoder = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&bytes))
@@ -13763,7 +13777,7 @@ fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifP
     let data = json["data"]
         .as_array()
         .ok_or_else(|| plain("GIPHY response contained no results".to_owned()))?;
-    std::fs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
     let mut gifs: Vec<GifResult> = data
         .iter()
         .filter_map(|item| {
@@ -13816,12 +13830,12 @@ fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifP
                 .as_ref()
                 .map(|(_, extension)| gif_path(dir, &gif.id, extension));
             if let Some(path) = &still_path
-                && path.exists()
+                && path.found()
             {
                 gif.still = Some(path.clone());
             }
             if let Some(path) = &animated_path
-                && path.exists()
+                && path.found()
             {
                 gif.animated = Some(path.clone());
             }
@@ -13884,10 +13898,10 @@ fn fetch_gif(url: &str, path: &Path) -> Option<PathBuf> {
 fn store_gif(path: &Path, bytes: &[u8]) -> Option<PathBuf> {
     let temporary = temporary_attachment_path(path);
     let _staged = Staged(temporary.clone());
-    std::fs::write(&temporary, bytes).ok()?;
+    crate::platform::sfs::write(&temporary, bytes).ok()?;
     // Windows does not replace an existing destination during rename. A file
     // already at the cache path came from another completed fetch.
-    if std::fs::rename(&temporary, path).is_err() && !path.is_file() {
+    if crate::platform::sfs::rename(&temporary, path).is_err() && !path.found_file() {
         return None;
     }
     Some(path.to_path_buf())
@@ -14055,10 +14069,10 @@ pub(super) async fn file_outbound(
             &prepared.mime,
             prepared.file_name.as_deref(),
         );
-        tokio::fs::create_dir_all(dir)
+        crate::platform::fs::create_dir_all(dir)
             .await
             .map_err(|error| error.to_string())?;
-        tokio::fs::write(&path, &prepared.bytes)
+        crate::platform::fs::write(&path, &prepared.bytes)
             .await
             .map_err(|error| error.to_string())?;
         if let Some(media) = content.media_mut() {
@@ -14745,9 +14759,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("thumb.webp");
         assert_eq!(store_gif(&path, b"complete"), Some(path.clone()));
-        assert_eq!(std::fs::read(&path).unwrap(), b"complete");
+        assert_eq!(crate::platform::sfs::read(&path).unwrap(), b"complete");
         assert!(
-            std::fs::read_dir(dir.path())
+            crate::platform::sfs::read_dir(dir.path())
                 .unwrap()
                 .flatten()
                 .all(|entry| !entry.file_name().to_string_lossy().ends_with(".part"))
@@ -14759,11 +14773,11 @@ mod tests {
     fn failed_gif_cache_publish_leaves_no_partial_file() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("thumb.webp");
-        std::fs::create_dir(&path).unwrap();
+        crate::platform::sfs::create_dir(&path).unwrap();
         assert_eq!(store_gif(&path, b"partial"), None);
         assert!(path.is_dir());
         assert!(
-            std::fs::read_dir(dir.path())
+            crate::platform::sfs::read_dir(dir.path())
                 .unwrap()
                 .flatten()
                 .all(|entry| !entry.file_name().to_string_lossy().ends_with(".part"))
@@ -14775,9 +14789,9 @@ mod tests {
     async fn cached_gif_animation_is_returned_without_fetching() {
         let (mut worker, events, mut commands, _) = super::receipt_tests::worker();
         let dir = worker.dirs.cache.join("gifs");
-        std::fs::create_dir_all(&dir).unwrap();
+        crate::platform::sfs::create_dir_all(&dir).unwrap();
         let expected = dir.join("fixture.webp");
-        std::fs::write(&expected, b"animation").unwrap();
+        crate::platform::sfs::write(&expected, b"animation").unwrap();
         worker
             .handle_command(Command::FetchGifAnimation {
                 id: "fixture".into(),
@@ -14785,10 +14799,11 @@ mod tests {
                 extension: "webp".into(),
             })
             .await;
-        let command = tokio::time::timeout(std::time::Duration::from_secs(2), commands.recv())
-            .await
-            .expect("animation command")
-            .expect("animation command");
+        let command =
+            crate::platform::time::timeout(std::time::Duration::from_secs(2), commands.recv())
+                .await
+                .expect("animation command")
+                .expect("animation command");
         worker.handle_command(command).await;
         assert!(events.try_iter().any(|event| matches!(
             event,
@@ -14918,19 +14933,25 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source.png");
         let folder = root.path().join("saved");
-        std::fs::create_dir(&folder).unwrap();
-        std::fs::write(&source, b"synthetic picture").unwrap();
-        std::fs::write(folder.join("photo.png"), b"keep this file").unwrap();
+        crate::platform::sfs::create_dir(&folder).unwrap();
+        crate::platform::sfs::write(&source, b"synthetic picture").unwrap();
+        crate::platform::sfs::write(folder.join("photo.png"), b"keep this file").unwrap();
         let first = save_album_copy(&source, &folder, "photo.png").unwrap();
         let second = save_album_copy(&source, &folder, "photo.png").unwrap();
         assert_eq!(first.file_name().unwrap(), "photo (2).png");
         assert_eq!(second.file_name().unwrap(), "photo (3).png");
         assert_eq!(
-            std::fs::read(folder.join("photo.png")).unwrap(),
+            crate::platform::sfs::read(folder.join("photo.png")).unwrap(),
             b"keep this file"
         );
-        assert_eq!(std::fs::read(first).unwrap(), b"synthetic picture");
-        assert_eq!(std::fs::read(second).unwrap(), b"synthetic picture");
+        assert_eq!(
+            crate::platform::sfs::read(first).unwrap(),
+            b"synthetic picture"
+        );
+        assert_eq!(
+            crate::platform::sfs::read(second).unwrap(),
+            b"synthetic picture"
+        );
     }
 
     /// A failed derived-row write keeps the album backfill retryable and preserves local paths.
@@ -15586,7 +15607,7 @@ mod tests {
             "zapfast-attachment-staging-{}",
             rand::random::<u64>()
         ));
-        std::fs::create_dir_all(&directory).expect("creates staging directory");
+        crate::platform::sfs::create_dir_all(&directory).expect("creates staging directory");
         let destination = directory.join("photo.jpg");
         let (first_path, first) = temporary_attachment_file(&destination).expect("first file");
         let (second_path, second) = temporary_attachment_file(&destination).expect("second file");
@@ -15600,15 +15621,16 @@ mod tests {
         );
         assert!(!destination.exists());
         drop((first, second));
-        std::fs::write(&destination, b"complete attachment").expect("writes completed file");
+        crate::platform::sfs::write(&destination, b"complete attachment")
+            .expect("writes completed file");
         discard_attachment_staging(&directory);
         assert!(!first_path.exists());
         assert!(!second_path.exists());
         assert_eq!(
-            std::fs::read(&destination).expect("reads completed file"),
+            crate::platform::sfs::read(&destination).expect("reads completed file"),
             b"complete attachment"
         );
-        std::fs::remove_dir_all(&directory).expect("removes staging directory");
+        crate::platform::sfs::remove_dir_all(&directory).expect("removes staging directory");
     }
 
     #[test]
@@ -15690,18 +15712,18 @@ mod tests {
     async fn a_download_never_replaces_a_file_in_the_folder() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("report.pdf");
-        std::fs::write(&path, b"mine").unwrap();
+        crate::platform::sfs::write(&path, b"mine").unwrap();
         let mut landed = Vec::new();
         for body in [b"first".as_slice(), b"second"] {
             let (temporary, _) = temporary_attachment_file(&path).unwrap();
-            std::fs::write(&temporary, body).unwrap();
+            crate::platform::sfs::write(&temporary, body).unwrap();
             landed.push(publish_beside(&temporary, &path).await.unwrap());
             assert!(!temporary.exists());
         }
-        assert_eq!(std::fs::read(&path).unwrap(), b"mine");
+        assert_eq!(crate::platform::sfs::read(&path).unwrap(), b"mine");
         assert_eq!(landed[0], dir.path().join("report (1).pdf"));
         assert_eq!(landed[1], dir.path().join("report (2).pdf"));
-        assert_eq!(std::fs::read(&landed[1]).unwrap(), b"second");
+        assert_eq!(crate::platform::sfs::read(&landed[1]).unwrap(), b"second");
     }
 
     #[test]
@@ -17259,7 +17281,7 @@ mod tests {
             generation,
             online,
             succeeded,
-        } = tokio::time::timeout(Duration::from_secs(1), wa_events.recv())
+        } = crate::platform::time::timeout(Duration::from_secs(1), wa_events.recv())
             .await
             .unwrap()
             .unwrap()
@@ -17283,7 +17305,7 @@ mod tests {
             generation,
             online,
             succeeded,
-        } = tokio::time::timeout(Duration::from_secs(1), wa_events.recv())
+        } = crate::platform::time::timeout(Duration::from_secs(1), wa_events.recv())
             .await
             .unwrap()
             .unwrap()
@@ -17380,12 +17402,12 @@ mod tests {
         );
         assert!(chosen.is_dir(), "the folder is created when needed");
         // A folder that cannot exist, such as one below a file, falls back.
-        std::fs::write(root.join("file"), b"").unwrap();
+        crate::platform::sfs::write(root.join("file"), b"").unwrap();
         worker.download_folder = Some(root.join("file/inside"));
         assert_eq!(worker.download_dir(chat), worker.dirs.media_cache_dir());
         worker.download_folder = None;
         assert_eq!(worker.download_dir(chat), worker.dirs.media_cache_dir());
-        let _ = std::fs::remove_dir_all(root);
+        let _ = crate::platform::sfs::remove_dir_all(root);
     }
 
     /// Canonical phone and privacy ids name the same destination, including groups.
@@ -17415,8 +17437,8 @@ mod tests {
         assert_eq!(worker.download_dir(chat), path);
 
         // An inaccessible nested chat folder also uses the ordinary cache.
-        std::fs::remove_dir(&path).unwrap();
-        std::fs::write(&path, b"blocked").unwrap();
+        crate::platform::sfs::remove_dir(&path).unwrap();
+        crate::platform::sfs::write(&path, b"blocked").unwrap();
         assert_eq!(worker.download_dir(chat), worker.dirs.media_cache_dir());
     }
 
@@ -17449,16 +17471,16 @@ mod tests {
         worker.archive.ensure_chat(chat, "Alice").unwrap();
         let dir = worker.download_dir(chat);
         let path = named_media_path(&dir, "application/pdf", "report.pdf").unwrap();
-        std::fs::write(&path, b"existing").unwrap();
+        crate::platform::sfs::write(&path, b"existing").unwrap();
         let (temporary, file) = temporary_attachment_file(&path).unwrap();
         drop(file);
-        std::fs::write(&temporary, b"download").unwrap();
+        crate::platform::sfs::write(&temporary, b"download").unwrap();
         let published = publish_beside(&temporary, &path).await.unwrap();
         assert_eq!(published, dir.join("report (1).pdf"));
-        assert_eq!(std::fs::read(&path).unwrap(), b"existing");
-        assert_eq!(std::fs::read(&published).unwrap(), b"download");
+        assert_eq!(crate::platform::sfs::read(&path).unwrap(), b"existing");
+        assert_eq!(crate::platform::sfs::read(&published).unwrap(), b"download");
         assert!(!temporary.exists());
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
+        assert_eq!(crate::platform::sfs::read_dir(&dir).unwrap().count(), 2);
         assert!(!worker.dirs.media_cache_dir().join("report.pdf").exists());
         assert!(
             !worker
@@ -17485,12 +17507,22 @@ mod tests {
         let account = folder.parent().unwrap();
         std::os::unix::fs::symlink(outside.path(), account).unwrap();
         assert_eq!(worker.download_dir(chat), worker.dirs.media_cache_dir());
-        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
-        std::fs::remove_file(account).unwrap();
-        std::fs::create_dir(account).unwrap();
+        assert_eq!(
+            crate::platform::sfs::read_dir(outside.path())
+                .unwrap()
+                .count(),
+            0
+        );
+        crate::platform::sfs::remove_file(account).unwrap();
+        crate::platform::sfs::create_dir(account).unwrap();
         std::os::unix::fs::symlink(outside.path(), &folder).unwrap();
         assert_eq!(worker.download_dir(chat), worker.dirs.media_cache_dir());
-        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
+        assert_eq!(
+            crate::platform::sfs::read_dir(outside.path())
+                .unwrap()
+                .count(),
+            0
+        );
     }
 
     /// Selecting an already-used root must not sweep a download started in this session.
@@ -17501,9 +17533,9 @@ mod tests {
         let dir =
             download_folders::account_folder(root.path(), &worker.dirs.id, worker.me_pn.as_deref())
                 .join("Alice");
-        std::fs::create_dir_all(&dir).unwrap();
+        crate::platform::sfs::create_dir_all(&dir).unwrap();
         let partial = dir.join(".photo.0123456789abcdef.part");
-        std::fs::write(&partial, b"old").unwrap();
+        crate::platform::sfs::write(&partial, b"old").unwrap();
         worker
             .handle_command(Command::SetDownloadFolder(Some(root.path().to_owned())))
             .await;
@@ -17511,14 +17543,14 @@ mod tests {
             !partial.exists(),
             "a restarted worker clears crash leftovers"
         );
-        std::fs::write(&partial, b"active").unwrap();
+        crate::platform::sfs::write(&partial, b"active").unwrap();
         worker
             .handle_command(Command::SetDownloadFolder(None))
             .await;
         worker
             .handle_command(Command::SetDownloadFolder(Some(root.path().to_owned())))
             .await;
-        assert_eq!(std::fs::read(&partial).unwrap(), b"active");
+        assert_eq!(crate::platform::sfs::read(&partial).unwrap(), b"active");
     }
 
     /// A local staging failure switches to a writable cache before any network transfer.
@@ -17526,7 +17558,7 @@ mod tests {
     async fn unavailable_staging_uses_the_cache() {
         let root = tempfile::tempdir().unwrap();
         let blocked = root.path().join("blocked");
-        std::fs::write(&blocked, b"not a directory").unwrap();
+        crate::platform::sfs::write(&blocked, b"not a directory").unwrap();
         let path = blocked.join("report.pdf");
         let cache = root.path().join("cache/message.pdf");
         assert!(stage_attachment(&path, None).await.is_err());
@@ -17537,7 +17569,7 @@ mod tests {
         drop(file);
         drop(staged);
         assert!(!temporary.exists());
-        std::fs::write(root.path().join("cache-blocked"), b"blocked").unwrap();
+        crate::platform::sfs::write(root.path().join("cache-blocked"), b"blocked").unwrap();
         assert!(
             stage_attachment(&path, Some(&root.path().join("cache-blocked/file")))
                 .await
@@ -17551,9 +17583,9 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let temporary = root.path().join(".verified.0123456789abcdef.part");
         let staged = Staged(temporary.clone());
-        std::fs::write(&temporary, b"verified fixture").unwrap();
+        crate::platform::sfs::write(&temporary, b"verified fixture").unwrap();
         let blocked = root.path().join("blocked");
-        std::fs::write(&blocked, b"keep").unwrap();
+        crate::platform::sfs::write(&blocked, b"keep").unwrap();
         let path = blocked.join("report.pdf");
         let cache = root.path().join("cache/message.pdf");
         assert!(
@@ -17565,12 +17597,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(saved, cache);
-        assert_eq!(std::fs::read(&saved).unwrap(), b"verified fixture");
-        assert_eq!(std::fs::read(&blocked).unwrap(), b"keep");
+        assert_eq!(
+            crate::platform::sfs::read(&saved).unwrap(),
+            b"verified fixture"
+        );
+        assert_eq!(crate::platform::sfs::read(&blocked).unwrap(), b"keep");
         drop(staged);
         assert!(!temporary.exists());
         assert_eq!(
-            std::fs::read_dir(cache.parent().unwrap()).unwrap().count(),
+            crate::platform::sfs::read_dir(cache.parent().unwrap())
+                .unwrap()
+                .count(),
             1
         );
     }
@@ -17820,7 +17857,7 @@ mod tests {
                 );
             } else {
                 let path = row.content.media().unwrap().path.as_ref().unwrap();
-                assert_eq!(std::fs::read(path).unwrap(), [1, 2, 3, 4]);
+                assert_eq!(crate::platform::sfs::read(path).unwrap(), [1, 2, 3, 4]);
                 assert_eq!(row.thumbnail, Some(vec![1, 2, 3]));
             }
             let raw = wa::Message::decode_from_slice(&raw).unwrap();
@@ -17870,19 +17907,19 @@ mod tests {
         let root = std::env::temp_dir().join(format!("zapfast-start-over-{}", std::process::id()));
         let dirs = crate::paths::AppDirs::under(&root);
         dirs.ensure().unwrap();
-        std::fs::write(dirs.archive_db(), b"encrypted").unwrap();
+        crate::platform::sfs::write(dirs.archive_db(), b"encrypted").unwrap();
         let mut wal = dirs.archive_db().into_os_string();
         wal.push("-wal");
-        std::fs::write(&wal, b"log").unwrap();
-        std::fs::write(dirs.session_db(), b"keys").unwrap();
+        crate::platform::sfs::write(&wal, b"log").unwrap();
+        crate::platform::sfs::write(dirs.session_db(), b"keys").unwrap();
         let kept = set_aside_unreadable_archive(&dirs.as_account()).unwrap();
-        assert_eq!(std::fs::read(&kept).unwrap(), b"encrypted");
+        assert_eq!(crate::platform::sfs::read(&kept).unwrap(), b"encrypted");
         let mut kept_wal = kept.clone().into_os_string();
         kept_wal.push("-wal");
-        assert_eq!(std::fs::read(kept_wal).unwrap(), b"log");
+        assert_eq!(crate::platform::sfs::read(kept_wal).unwrap(), b"log");
         assert!(!dirs.archive_db().exists());
         assert!(!dirs.session_db().exists());
-        let _ = std::fs::remove_dir_all(root);
+        let _ = crate::platform::sfs::remove_dir_all(root);
     }
 
     #[test]
@@ -19614,7 +19651,7 @@ mod receipt_tests {
             vec![false, true]
         );
         for (_, path) in &shown {
-            assert_eq!(std::fs::read(path).unwrap(), jpeg);
+            assert_eq!(crate::platform::sfs::read(path).unwrap(), jpeg);
         }
         assert!(worker.group_pictures_sent.is_empty());
 
@@ -22405,7 +22442,7 @@ mod receipt_tests {
             measure_media(&dir).expect("an absent cache is empty"),
             crate::model::StorageStats::default()
         );
-        std::fs::create_dir_all(dir.join("cards")).expect("dirs");
+        crate::platform::sfs::create_dir_all(dir.join("cards")).expect("dirs");
         for (name, bytes) in [
             ("a.jpg", 10),
             ("b.mp4", 20),
@@ -22413,7 +22450,7 @@ mod receipt_tests {
             ("cards/d.pdf", 4),
             (".e.part", 99),
         ] {
-            std::fs::write(dir.join(name), vec![0u8; bytes]).expect("write");
+            crate::platform::sfs::write(dir.join(name), vec![0u8; bytes]).expect("write");
         }
         let stats = measure_media(&dir).expect("measured");
         assert_eq!(
@@ -22440,11 +22477,11 @@ mod receipt_tests {
         let (mut worker, events, _inbox, _wa) = receipt_tests::worker();
         let elsewhere = tempfile::tempdir().expect("temp");
         let cache = worker.dirs.media_cache_dir();
-        std::fs::create_dir_all(&cache).expect("cache");
+        crate::platform::sfs::create_dir_all(&cache).expect("cache");
         let cached = cache.join("photo.jpg");
         let kept = elsewhere.path().join("kept.jpg");
         for (id, path) in [("photo", &cached), ("kept", &kept)] {
-            std::fs::write(path, b"jpeg").expect("file");
+            crate::platform::sfs::write(path, b"jpeg").expect("file");
             let mut picture = incoming(id, 100);
             picture.content = Content::Image {
                 motion: None,
@@ -24225,13 +24262,13 @@ mod receipt_tests {
     fn an_old_avatar_shows_before_its_lookup() {
         let (mut worker, events, _, _) = worker();
         let path = worker.avatar_file(PEER, false);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, b"picture").unwrap();
-        std::fs::File::options()
+        crate::platform::sfs::create_dir_all(path.parent().unwrap()).unwrap();
+        crate::platform::sfs::write(&path, b"picture").unwrap();
+        crate::platform::sfs::File::options()
             .write(true)
             .open(&path)
             .unwrap()
-            .set_modified(std::time::SystemTime::now() - AVATAR_FRESH * 2)
+            .set_modified(crate::platform::SystemTime::now() - AVATAR_FRESH * 2)
             .unwrap();
         worker.fetch_avatar(PEER.to_owned(), false);
         let shown: Vec<_> = events
@@ -24249,7 +24286,7 @@ mod receipt_tests {
                 .contains_key(&(PEER.to_owned(), false))
         );
         // An empty file says there is no picture, old or not.
-        std::fs::write(&path, b"").unwrap();
+        crate::platform::sfs::write(&path, b"").unwrap();
         assert_eq!(last_avatar(&path), None);
     }
 
@@ -25476,7 +25513,7 @@ mod chat_removal_tests {
                     .chat_jid(CHAT.parse().unwrap())
                     .message_id("m100".to_owned())
                     .from_me(true)
-                    .timestamp(std::time::SystemTime::now().into())
+                    .timestamp(crate::platform::SystemTime::now().into())
                     .action(Box::default())
                     .from_full_sync(false)
                     .build(),
@@ -25536,7 +25573,7 @@ mod chat_removal_tests {
                     .chat_jid(CHAT.parse().unwrap())
                     .message_id(id.to_owned())
                     .from_me(true)
-                    .timestamp(std::time::SystemTime::now().into())
+                    .timestamp(crate::platform::SystemTime::now().into())
                     .action(Box::default())
                     .from_full_sync(false)
                     .build(),
@@ -25591,7 +25628,7 @@ mod chat_removal_tests {
                     .chat_jid(CHAT.parse().unwrap())
                     .message_id("m100".to_owned())
                     .from_me(true)
-                    .timestamp(std::time::SystemTime::now().into())
+                    .timestamp(crate::platform::SystemTime::now().into())
                     .action(Box::default())
                     .from_full_sync(false)
                     .build(),
@@ -25650,7 +25687,7 @@ mod chat_removal_tests {
                         .chat_jid(source.parse().unwrap())
                         .message_id("m100".to_owned())
                         .from_me(true)
-                        .timestamp(std::time::SystemTime::now().into())
+                        .timestamp(crate::platform::SystemTime::now().into())
                         .action(Box::default())
                         .from_full_sync(false)
                         .build(),
@@ -25799,7 +25836,7 @@ mod chat_removal_tests {
                     wa_events::DeleteChatUpdate::builder()
                         .jid(CHAT.parse().unwrap())
                         .delete_media(false)
-                        .timestamp((std::time::UNIX_EPOCH + Duration::from_secs(300)).into())
+                        .timestamp((crate::platform::UNIX_EPOCH + Duration::from_secs(300)).into())
                         .action(Box::new({
                             let mut proto = wa::sync_action_value::DeleteChatAction::default();
                             proto.message_range = Some({
@@ -25978,7 +26015,7 @@ mod chat_removal_tests {
                         .chat_jid(CHAT.parse().unwrap())
                         .message_id("m100".to_owned())
                         .from_me(false)
-                        .timestamp(std::time::SystemTime::now().into())
+                        .timestamp(crate::platform::SystemTime::now().into())
                         .action(Box::default())
                         .from_full_sync(true)
                         .build(),
@@ -26183,7 +26220,7 @@ mod chat_removal_tests {
                     .chat_jid(group.parse().unwrap())
                     .message_id("own".to_owned())
                     .from_me(true)
-                    .timestamp(std::time::SystemTime::now().into())
+                    .timestamp(crate::platform::SystemTime::now().into())
                     .action(Box::default())
                     .from_full_sync(false)
                     .build(),
@@ -26511,7 +26548,7 @@ mod missing_attachment_tests {
         let (mut worker, events, _, _) = receipt_tests::worker();
         worker.privacy_ready = true;
         let cache = worker.dirs.media_cache_dir();
-        std::fs::create_dir_all(&cache).unwrap();
+        crate::platform::sfs::create_dir_all(&cache).unwrap();
         let gone = cache.join("gone.jpg");
         let row = stored(&worker, &gone);
         worker.attachment_missing(&row.chat, &row.id, None, &gone);
@@ -26535,9 +26572,9 @@ mod missing_attachment_tests {
         let (mut worker, _, _, _) = receipt_tests::worker();
         worker.privacy_ready = true;
         let cache = worker.dirs.media_cache_dir();
-        std::fs::create_dir_all(&cache).unwrap();
+        crate::platform::sfs::create_dir_all(&cache).unwrap();
         let copy = cache.join("moved.jpg");
-        std::fs::write(&copy, b"jpeg").unwrap();
+        crate::platform::sfs::write(&copy, b"jpeg").unwrap();
         let gone = cache.join("old").join("moved.jpg");
         let row = stored(&worker, &gone);
         worker.attachment_missing(&row.chat, &row.id, None, &gone);
@@ -26549,9 +26586,9 @@ mod missing_attachment_tests {
         let (mut worker, _, _, _) = receipt_tests::worker();
         worker.privacy_ready = true;
         let cache = worker.dirs.media_cache_dir();
-        std::fs::create_dir_all(&cache).unwrap();
+        crate::platform::sfs::create_dir_all(&cache).unwrap();
         let newer = cache.join("newer.jpg");
-        std::fs::write(&newer, b"jpeg").unwrap();
+        crate::platform::sfs::write(&newer, b"jpeg").unwrap();
         let row = stored(&worker, &newer);
         worker.attachment_missing(&row.chat, &row.id, None, &newer);
         assert_eq!(path_of(&worker, &row).as_ref(), Some(&newer), "it exists");
@@ -26606,9 +26643,9 @@ mod send_order_tests {
         let mut next = next.unwrap();
         assert!(turn.gate.cancel(), "nothing has committed the send yet");
         let cache = worker.dirs.media_cache_dir();
-        std::fs::create_dir_all(&cache).unwrap();
+        crate::platform::sfs::create_dir_all(&cache).unwrap();
         let cached = cache.join("synthetic-upload.jpg");
-        std::fs::write(&cached, b"jpeg").unwrap();
+        crate::platform::sfs::write(&cached, b"jpeg").unwrap();
         let mut row = crate::archive::tests::message(&chat, "attachment", 100, true);
         let mut attachment = media(None, None, None, None);
         attachment.path = Some(cached.clone());
@@ -26785,7 +26822,7 @@ mod saved_download_tests {
         for target in [Target::Document, Target::Carousel, Target::Motion] {
             let (mut worker, events, _, _) = receipt_tests::worker();
             let file = tempfile::NamedTempFile::new().unwrap();
-            std::fs::write(file.path(), b"fixture").unwrap();
+            crate::platform::sfs::write(file.path(), b"fixture").unwrap();
             let message = fixture(target);
             worker
                 .archive
@@ -26818,7 +26855,7 @@ mod saved_download_tests {
                 )
                 .is_none()
             );
-            assert_eq!(std::fs::read(file.path()).unwrap(), b"fixture");
+            assert_eq!(crate::platform::sfs::read(file.path()).unwrap(), b"fixture");
             crate::archive::tests::set_derived_update_failure(&worker.archive, false);
             finish(&mut worker, target, Ok(file.path().to_owned())).await;
             assert_eq!(outcome(&events).unwrap(), file.path());

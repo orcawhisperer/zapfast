@@ -159,8 +159,8 @@ mod tests {
     #[ignore]
     fn the_desktop_portal_answers() {
         let appearance = SystemAppearance::spawn(|| {});
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while appearance.dark().is_none() && std::time::Instant::now() < deadline {
+        let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(5);
+        while appearance.dark().is_none() && crate::platform::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(

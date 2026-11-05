@@ -89,15 +89,15 @@ pub fn write(
     dir: &Path,
 ) -> Result<PathBuf, String> {
     let picture = match source {
-        PictureSource::File(path) => std::fs::read(path)
+        PictureSource::File(path) => crate::platform::sfs::read(path)
             .map_err(|error| error.to_string())
             .and_then(|bytes| edit(&bytes, crop, turns)),
         PictureSource::Pasted(rgba) => edit_pasted(rgba, width, height, crop, turns),
     }?;
-    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let name = super::sticker_store::content_hash(&picture.bytes);
     let path = dir.join(format!("{name}.{}", picture.extension));
-    std::fs::write(&path, picture.bytes).map_err(|error| error.to_string())?;
+    crate::platform::sfs::write(&path, picture.bytes).map_err(|error| error.to_string())?;
     Ok(path)
 }
 
@@ -343,7 +343,7 @@ mod tests {
         let root = tempfile::tempdir().expect("makes the directory");
         let dir = root.path().to_path_buf();
         let source = dir.join("source.png");
-        std::fs::write(&source, png(800, 600)).expect("writes the source");
+        crate::platform::sfs::write(&source, png(800, 600)).expect("writes the source");
         let crop = PictureCrop {
             x: 100,
             y: 50,

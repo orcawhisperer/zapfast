@@ -348,7 +348,7 @@ mod tests {
             0
         );
         drop(archive);
-        std::fs::remove_file(path).unwrap();
+        crate::platform::sfs::remove_file(path).unwrap();
     }
 
     #[test]

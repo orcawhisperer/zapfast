@@ -3,9 +3,9 @@
 //! The backend translates protocol types into these models, keeping protobufs
 //! out of views and giving the archive a stable shape.
 
+use crate::platform::Instant;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 

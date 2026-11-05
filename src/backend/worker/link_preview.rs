@@ -2,6 +2,7 @@
 //! refuse hosts that point at the reader's own machine or network.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -393,8 +394,10 @@ pub(super) fn thumbnail(bytes: &[u8]) -> Option<Vec<u8>> {
 
 /// Resolves names itself so that a name pointing at the reader's own network
 /// is refused, and the connection goes to the addresses that were checked.
+#[cfg(not(target_arch = "wasm32"))]
 struct GuardedResolver;
 
+#[cfg(not(target_arch = "wasm32"))]
 impl reqwest::dns::Resolve for GuardedResolver {
     fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
         Box::pin(async move {
@@ -409,6 +412,14 @@ impl reqwest::dns::Resolve for GuardedResolver {
 }
 
 /// The body up to `limit` bytes, and whether more followed.
+#[cfg(target_arch = "wasm32")]
+async fn read_body(response: reqwest::Response, limit: usize) -> Option<(Vec<u8>, bool)> {
+    let body = response.bytes().await.ok()?.to_vec();
+    let more = body.len() > limit;
+    Some((body.into_iter().take(limit).collect(), more))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 async fn read_body(mut response: reqwest::Response, limit: usize) -> Option<(Vec<u8>, bool)> {
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.ok()? {
@@ -433,6 +444,13 @@ fn proxy_url_for_preview(url: &str) -> String {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn client(_url: &reqwest::Url) -> Option<reqwest::Client> {
+    // The browser applies its own rules, and most sites refuse a page's fetch.
+    reqwest::Client::builder().build().ok()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn client(url: &reqwest::Url) -> Option<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
         .user_agent(USER_AGENT)
@@ -463,7 +481,7 @@ fn client(url: &reqwest::Url) -> Option<reqwest::Client> {
 /// linked site is contacted. Gives `None` on any failure or when the page says
 /// nothing; nothing about the link is logged.
 pub(super) async fn fetch(url: String) -> Option<ComposedPreview> {
-    tokio::time::timeout(TOTAL_TIME, fetch_inner(url))
+    crate::platform::time::timeout(TOTAL_TIME, fetch_inner(url))
         .await
         .ok()
         .flatten()
@@ -498,10 +516,11 @@ async fn fetch_inner(url: String) -> Option<ComposedPreview> {
     let base = response.url().clone();
     let (bytes, _) = read_body(response, MAX_PAGE).await?;
     // Parsing a large page is CPU work no timeout or abort can interrupt.
-    let meta =
-        tokio::task::spawn_blocking(move || parse_page(&String::from_utf8_lossy(&bytes), &base))
-            .await
-            .ok()?;
+    let meta = crate::platform::spawn_blocking(move || {
+        parse_page(&String::from_utf8_lossy(&bytes), &base)
+    })
+    .await
+    .ok()?;
     if meta.title.is_none() && meta.description.is_none() && meta.image.is_none() {
         return None;
     }
@@ -534,7 +553,7 @@ async fn fetch_image(client: &reqwest::Client, url: &str) -> Option<Vec<u8>> {
     if truncated {
         return None;
     }
-    tokio::task::spawn_blocking(move || thumbnail(&bytes))
+    crate::platform::spawn_blocking(move || thumbnail(&bytes))
         .await
         .ok()
         .flatten()
@@ -818,7 +837,7 @@ mod tests {
 
     #[test]
     fn thumbnail_refuses_huge_claims_before_decoding() {
-        let started = std::time::Instant::now();
+        let started = crate::platform::Instant::now();
         let small = png(100, 100);
         assert_eq!(thumbnail(&png_claiming(&small, 60000, 60000)), None);
         // A real picture over the cap is refused too.
@@ -831,10 +850,12 @@ mod tests {
     #[tokio::test]
     async fn fetch_refuses_local_without_network() {
         for url in ["http://127.0.0.1:9/", "http://printer.local/"] {
-            let result =
-                tokio::time::timeout(std::time::Duration::from_millis(100), fetch(url.into()))
-                    .await
-                    .expect("refused before any connection");
+            let result = crate::platform::time::timeout(
+                std::time::Duration::from_millis(100),
+                fetch(url.into()),
+            )
+            .await
+            .expect("refused before any connection");
             assert!(result.is_none(), "{url}");
         }
     }

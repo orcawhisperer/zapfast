@@ -7,9 +7,13 @@
 use std::sync::{OnceLock, RwLock};
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::net::TcpStream;
+#[cfg(not(target_arch = "wasm32"))]
 use whatsapp_rust::transport::{Connector, TransportFactory};
+#[cfg(not(target_arch = "wasm32"))]
 use whatsapp_rust::wacore::net::WHATSAPP_WEB_WS_URL;
 
 /// Time allowed to reach the proxy and open the tunnel.
@@ -123,6 +127,7 @@ impl Proxy {
     }
 
     /// Opens a tunnel through the proxy to `host:port`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub async fn connect(&self, host: &str, port: u16) -> std::io::Result<TcpStream> {
         let mut stream = TcpStream::connect((self.host.as_str(), self.port)).await?;
         stream.set_nodelay(true)?;
@@ -135,6 +140,7 @@ impl Proxy {
         Ok(stream)
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     async fn http_connect<S: AsyncRead + AsyncWrite + Unpin>(
         &self,
         stream: &mut S,
@@ -181,6 +187,7 @@ impl Proxy {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     async fn socks5_connect<S: AsyncRead + AsyncWrite + Unpin>(
         &self,
         stream: &mut S,
@@ -410,16 +417,19 @@ pub fn agent() -> ureq::Agent {
 
 /// The Settings proxy as a reqwest proxy. reqwest reads the environment
 /// itself when this is `None`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn reqwest_proxy() -> Option<reqwest::Proxy> {
     from_settings().and_then(|proxy| reqwest::Proxy::all(&proxy.url).ok())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 /// Opens the WhatsApp WebSocket through a proxy.
 pub struct ProxyTransportFactory {
     proxy: Proxy,
     connector: OnceLock<Connector>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl ProxyTransportFactory {
     pub fn new(proxy: Proxy) -> Self {
         Self {
@@ -429,16 +439,18 @@ impl ProxyTransportFactory {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[whatsapp_rust::async_trait]
 impl TransportFactory for ProxyTransportFactory {
     async fn create_transport(&self) -> Result<crate::transport::Link, anyhow::Error> {
         let uri: http::Uri = WHATSAPP_WEB_WS_URL.parse()?;
         let host = uri.host().unwrap_or("web.whatsapp.com").to_owned();
         let port = uri.port_u16().unwrap_or(443);
-        let stream = tokio::time::timeout(CONNECT_TIMEOUT, self.proxy.connect(&host, port))
-            .await
-            .map_err(|_| anyhow::anyhow!("The proxy {} did not answer", self.proxy.redacted()))?
-            .map_err(|error| anyhow::anyhow!("Proxy {}: {error}", self.proxy.redacted()))?;
+        let stream =
+            crate::platform::time::timeout(CONNECT_TIMEOUT, self.proxy.connect(&host, port))
+                .await
+                .map_err(|_| anyhow::anyhow!("The proxy {} did not answer", self.proxy.redacted()))?
+                .map_err(|error| anyhow::anyhow!("Proxy {}: {error}", self.proxy.redacted()))?;
         crate::transport::websocket(&self.connector, uri, &host, stream, "through the proxy").await
     }
 }
@@ -482,7 +494,7 @@ mod tests {
     async fn socks5_tunnel_sends_the_host_name_and_credentials() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
+        let server = crate::platform::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut greeting = [0u8; 4];
             socket.read_exact(&mut greeting).await.unwrap();
@@ -515,7 +527,7 @@ mod tests {
     async fn http_tunnel_keeps_data_after_the_reply() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let server = tokio::spawn(async move {
+        let server = crate::platform::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
             while !request.ends_with(b"\r\n\r\n") {
@@ -541,7 +553,7 @@ mod tests {
     async fn http_tunnel_reports_rejected_credentials() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = Vec::new();
             while !request.ends_with(b"\r\n\r\n") {

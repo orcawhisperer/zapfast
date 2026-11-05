@@ -2,6 +2,7 @@
 //!
 //! Imported packs become named directories of WebP files.
 
+use crate::platform::FilePath as _;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -283,8 +284,8 @@ pub fn import_signal_pack(url: &str, packs: &Path) -> Result<String, String> {
 
 /// Imports a .wastickers or zip archive. Uses `title.txt` or the filename as title.
 pub fn import_archive(path: &Path, packs: &Path) -> Result<String, String> {
-    let file =
-        std::fs::File::open(path).map_err(|error| format!("Could not open the file: {error}"))?;
+    let file = crate::platform::sfs::File::open(path)
+        .map_err(|error| format!("Could not open the file: {error}"))?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|error| format!("This file is not a sticker archive: {error}"))?;
     let mut title: Option<String> = None;
@@ -368,7 +369,7 @@ pub fn extract_whatsapp_pack(
     if files.is_empty() {
         return Err("No stickers could be read from this pack".to_owned());
     }
-    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let mut written = Vec::new();
     for (index, (file, bytes)) in files.into_iter().enumerate() {
         let emojis = stickers
@@ -387,7 +388,7 @@ pub fn extract_whatsapp_pack(
             crate::sticker_meta::write(&bytes, &info).unwrap_or(bytes)
         };
         let path = dir.join(format!("{index:03}.webp"));
-        std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        crate::platform::sfs::write(&path, bytes).map_err(|error| error.to_string())?;
         written.push(path);
     }
     Ok(written)
@@ -396,7 +397,7 @@ pub fn extract_whatsapp_pack(
 /// Copies a pack's stickers into a new pack folder named after it, and
 /// returns the folder's name.
 pub fn copy_pack(from: &Path, packs: &Path, name: &str) -> Result<String, String> {
-    let mut stickers: Vec<PathBuf> = std::fs::read_dir(from)
+    let mut stickers: Vec<PathBuf> = crate::platform::sfs::read_dir(from)
         .map_err(|error| error.to_string())?
         .flatten()
         .map(|entry| entry.path())
@@ -408,7 +409,7 @@ pub fn copy_pack(from: &Path, packs: &Path, name: &str) -> Result<String, String
     stickers.sort();
     let files = stickers
         .iter()
-        .map(std::fs::read)
+        .map(crate::platform::sfs::read)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())?;
     write_pack(packs, name, files)
@@ -450,7 +451,7 @@ fn write_pack(packs: &Path, title: &str, files: Vec<Vec<u8>>) -> Result<String, 
     }
     let dir = unique_pack_dir(packs, title)?;
     for (index, bytes) in files.iter().enumerate() {
-        std::fs::write(dir.join(format!("{index:03}.webp")), bytes)
+        crate::platform::sfs::write(dir.join(format!("{index:03}.webp")), bytes)
             .map_err(|error| format!("Could not write the sticker pack: {error}"))?;
     }
     Ok(dir
@@ -515,7 +516,13 @@ fn animation_frames(bytes: &[u8]) -> Option<Vec<(image::RgbaImage, u32)>> {
     (frames.len() > 1).then_some(frames)
 }
 
+#[cfg(target_arch = "wasm32")]
+fn encode_animated(_frames: Vec<(image::RgbaImage, u32)>) -> Option<Vec<u8>> {
+    None
+}
+
 /// Encodes frames as a lossy animated WebP at sticker size.
+#[cfg(not(target_arch = "wasm32"))]
 fn encode_animated(frames: Vec<(image::RgbaImage, u32)>) -> Option<Vec<u8>> {
     use webp_animation::prelude::*;
     let (source_width, source_height) = frames.first().map(|(frame, _)| frame.dimensions())?;
@@ -567,8 +574,8 @@ pub(super) fn unique_pack_dir(root: &Path, title: &str) -> Result<PathBuf, Strin
             format!("{base} {}", attempt + 1)
         };
         let dir = root.join(&name);
-        if !dir.exists() {
-            std::fs::create_dir_all(&dir)
+        if !dir.found() {
+            crate::platform::sfs::create_dir_all(&dir)
                 .map_err(|error| format!("Could not create the pack folder: {error}"))?;
             return Ok(dir);
         }
@@ -656,11 +663,11 @@ mod tests {
     #[test]
     fn a_wastickers_archive_becomes_a_named_pack() {
         let root = std::env::temp_dir().join(format!("zapfast-packs-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = crate::platform::sfs::remove_dir_all(&root);
         let archive_path = root.join("in").join("Frogs.wastickers");
-        std::fs::create_dir_all(archive_path.parent().expect("dir")).expect("dirs");
+        crate::platform::sfs::create_dir_all(archive_path.parent().expect("dir")).expect("dirs");
         let webp = webp_bytes(tiny_png()).expect("encodes");
-        let file = std::fs::File::create(&archive_path).expect("creates");
+        let file = crate::platform::sfs::File::create(&archive_path).expect("creates");
         let mut writer = zip::ZipWriter::new(file);
         let plain: zip::write::FileOptions<'_, '_, ()> = zip::write::FileOptions::default();
         writer.start_file("title.txt", plain).expect("entry");
@@ -675,7 +682,7 @@ mod tests {
         let packs = root.join("packs");
         let title = import_archive(&archive_path, &packs).expect("imports");
         assert_eq!(title, "Happy Frogs");
-        let mut files: Vec<String> = std::fs::read_dir(packs.join("Happy Frogs"))
+        let mut files: Vec<String> = crate::platform::sfs::read_dir(packs.join("Happy Frogs"))
             .expect("lists")
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
@@ -689,7 +696,7 @@ mod tests {
         // Reimporting creates a separate numbered directory.
         let again = import_archive(&archive_path, &packs).expect("imports");
         assert_eq!(again, "Happy Frogs 2");
-        let _ = std::fs::remove_dir_all(root);
+        let _ = crate::platform::sfs::remove_dir_all(root);
     }
 
     #[test]
@@ -777,7 +784,7 @@ mod tests {
         )
         .expect("unpacks");
         assert_eq!(files.len(), 2, "the tray icon stays out");
-        let first = std::fs::read(&files[0]).expect("reads");
+        let first = crate::platform::sfs::read(&files[0]).expect("reads");
         assert_eq!(crate::sticker_meta::emojis(&first), vec!["🐸"]);
         assert_eq!(
             image::load_from_memory(&first)
@@ -791,7 +798,7 @@ mod tests {
         let packs = root.path().join("packs");
         assert_eq!(copy_pack(&dir, &packs, "Frogs").expect("copies"), "Frogs");
         assert_eq!(
-            std::fs::read_dir(packs.join("Frogs"))
+            crate::platform::sfs::read_dir(packs.join("Frogs"))
                 .expect("lists")
                 .count(),
             2
@@ -804,7 +811,7 @@ mod tests {
     #[ignore = "network"]
     fn fetches_a_real_pack_from_signal_on_this_machine() {
         let root = std::env::temp_dir().join(format!("zapfast-signal-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = crate::platform::sfs::remove_dir_all(&root);
         let url = std::env::var("ZAPFAST_TEST_PACK").unwrap_or_else(|_| {
             "https://signal.art/addstickers/#pack_id=9acc9e8aba563d26a4994e69263e3b25&pack_key=5a6dff3948c28efb9b7aaf93ecc375c69fc316e78077ed26867a14d10a0f6a12"
                 .to_owned()
@@ -812,12 +819,12 @@ mod tests {
         let title = import_signal_pack(&url, &root).expect("imports");
         let mut files = 0;
         let mut moving = 0;
-        for entry in std::fs::read_dir(root.join(&title))
+        for entry in crate::platform::sfs::read_dir(root.join(&title))
             .expect("lists")
             .flatten()
         {
             files += 1;
-            let head = std::fs::read(entry.path()).expect("reads");
+            let head = crate::platform::sfs::read(entry.path()).expect("reads");
             if head[..head.len().min(64)]
                 .windows(4)
                 .any(|window| window == b"ANIM")
@@ -827,7 +834,7 @@ mod tests {
         }
         eprintln!("pack {title:?}: {files} stickers, {moving} of them animated");
         assert!(files > 0, "the pack holds stickers");
-        let _ = std::fs::remove_dir_all(root);
+        let _ = crate::platform::sfs::remove_dir_all(root);
     }
 
     /// Verifies converted frames apply animation disposal correctly.

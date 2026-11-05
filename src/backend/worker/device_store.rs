@@ -4,6 +4,7 @@
 //! Its new migration drops an unused column that 0.14 still writes. Retain that
 //! column after migration, without reading or rewriting any stored secrets.
 
+use crate::platform::FilePath as _;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -14,14 +15,14 @@ pub(super) async fn open(path: &Path) -> Result<SqliteStore> {
     let store = SqliteStore::open(&path.to_string_lossy()).await;
     let path = path.to_owned();
     // Also repair after a later migration fails, before returning its error.
-    tokio::task::spawn_blocking(move || preserve_legacy_column(&path))
+    crate::platform::spawn_blocking(move || preserve_legacy_column(&path))
         .await
         .context("Device store compatibility task failed")??;
     store.context("Could not open the device store")
 }
 
 fn preserve_legacy_column(path: &Path) -> Result<()> {
-    if !path.try_exists()? {
+    if !path.checked_found()? {
         return Ok(());
     }
     let mut connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;

@@ -5,12 +5,13 @@
 //! from memory, and a paused one keeps only its first frame, the poster, until
 //! it plays.
 
+use crate::platform::Instant;
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
 
@@ -463,7 +464,7 @@ fn image_limits() -> image::Limits {
 
 /// Read a bounded encoded source even if its file grows while it is being read.
 fn image_source(path: &Path) -> Option<Vec<u8>> {
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::platform::sfs::File::open(path).ok()?;
     if file.metadata().ok()?.len() > MAX_IMAGE_BYTES {
         return None;
     }
@@ -509,7 +510,7 @@ fn decode_image(path: &Path, extension: &str, limit: usize) -> Option<Decoded> {
     if extension != "gif" {
         return decode_webp(path, limit);
     }
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::platform::sfs::File::open(path).ok()?;
     let reader = std::io::BufReader::new(file);
     let frames = image::codecs::gif::GifDecoder::new(reader)
         .ok()?
@@ -527,6 +528,31 @@ fn decode_image(path: &Path, extension: &str, limit: usize) -> Option<Decoded> {
 
 /// Decodes animated WebP with libwebp. It returns complete canvas frames,
 /// unlike the `image` decoder, which did not apply frame disposal correctly.
+#[cfg(target_arch = "wasm32")]
+fn decode_webp(path: &Path, limit: usize) -> Option<Decoded> {
+    use image::{AnimationDecoder, ImageDecoder};
+    // No libwebp in a page. `image` reads an animation's frames, with a
+    // simpler handling of frame disposal, under the same limits.
+    let bytes = image_source(path)?;
+    image_reader(&bytes)?.into_dimensions().ok()?;
+    let announced = webp_moves(&bytes);
+    let mut decoder = image::codecs::webp::WebPDecoder::new(std::io::Cursor::new(&bytes)).ok()?;
+    decoder.set_limits(image_limits()).ok()?;
+    let mut decoded = Vec::new();
+    for frame in decoder.into_frames().take(limit.max(2)) {
+        let frame = frame.ok()?;
+        let (numerator, denominator) = frame.delay().numer_denom_ms();
+        let delay = Duration::from_millis(u64::from(numerator / denominator.max(1)).max(20));
+        decoded.push((to_color_image(&frame.into_buffer()), delay));
+    }
+    if decoded.is_empty() || (decoded.len() < 2 && !announced) {
+        return None;
+    }
+    decoded.truncate(limit);
+    Some(Decoded { frames: decoded })
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_webp(path: &Path, limit: usize) -> Option<Decoded> {
     let bytes = image_source(path)?;
     let announced = webp_moves(&bytes);
@@ -587,7 +613,7 @@ fn decode_video(path: &Path, limit: usize) -> Option<Decoded> {
 
 /// Decodes an MP4 video track in-process.
 fn decode_mp4(path: &Path, limit: usize) -> Option<Decoded> {
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::platform::sfs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
     decode_mp4_from(std::io::BufReader::new(file), size, limit)
 }
@@ -977,7 +1003,7 @@ mod tests {
             let frame = image::RgbaImage::from_pixel(64, 48, image::Rgba([shade, 0, 0, 255]));
             encoder.add_frame(&frame, index as i32 * 100).unwrap();
         }
-        std::fs::write(&path, &*encoder.finalize(200).unwrap()).unwrap();
+        crate::platform::sfs::write(&path, &*encoder.finalize(200).unwrap()).unwrap();
         assert_eq!(decode(&path, 1).unwrap().frames[0].0.size, [64, 48]);
     }
 
@@ -991,7 +1017,7 @@ mod tests {
             let frame = image::RgbaImage::from_pixel(320, 4096, image::Rgba([shade, 0, 0, 255]));
             encoder.add_frame(&frame, index as i32 * 100).unwrap();
         }
-        std::fs::write(&path, &*encoder.finalize(200).unwrap()).unwrap();
+        crate::platform::sfs::write(&path, &*encoder.finalize(200).unwrap()).unwrap();
         let poster = decode(&path, 1).unwrap();
         assert_eq!(poster.frames.len(), 1);
         let size = poster.frames[0].0.size;
@@ -1028,7 +1054,7 @@ mod tests {
         encoder
             .encode(&image, 800, 400, image::ExtendedColorType::Rgb8)
             .unwrap();
-        std::fs::write(&path, bytes).unwrap();
+        crate::platform::sfs::write(&path, bytes).unwrap();
         let decoded = decode(&path, 1).unwrap();
         let poster = &decoded.frames[0].0;
         assert_eq!(poster.size, [160, 320]);
@@ -1049,7 +1075,7 @@ mod tests {
         image::RgbImage::from_pixel(8, 8, image::Rgb([80, 120, 180]))
             .save(&png)
             .unwrap();
-        let mut bytes = std::fs::read(&png).unwrap();
+        let mut bytes = crate::platform::sfs::read(&png).unwrap();
         bytes[16..20].copy_from_slice(&10_000_u32.to_be_bytes());
         bytes[20..24].copy_from_slice(&10_000_u32.to_be_bytes());
         let mut crc = u32::MAX;
@@ -1060,14 +1086,14 @@ mod tests {
             }
         }
         bytes[29..33].copy_from_slice(&(!crc).to_be_bytes());
-        std::fs::write(&png, &bytes).unwrap();
+        crate::platform::sfs::write(&png, &bytes).unwrap();
         let webp = animated_webp(dir.path(), "huge.webp", 2);
-        let mut webp_bytes = std::fs::read(&webp).unwrap();
+        let mut webp_bytes = crate::platform::sfs::read(&webp).unwrap();
         assert_eq!(&webp_bytes[12..16], b"VP8X");
         for start in [24, 27] {
             webp_bytes[start..start + 3].copy_from_slice(&9_999_u32.to_le_bytes()[..3]);
         }
-        std::fs::write(&webp, &webp_bytes).unwrap();
+        crate::platform::sfs::write(&webp, &webp_bytes).unwrap();
         for encoded in [&bytes, &webp_bytes] {
             let dimensions = image::ImageReader::new(std::io::Cursor::new(encoded))
                 .with_guessed_format()
@@ -1086,7 +1112,7 @@ mod tests {
         assert!(decode_still(&png).is_none());
         assert!(decode_webp(&webp, 1).is_none());
         let oversized_file = dir.path().join("too-many-bytes.png");
-        std::fs::File::create(&oversized_file)
+        crate::platform::sfs::File::create(&oversized_file)
             .unwrap()
             .set_len(MAX_IMAGE_BYTES + 1)
             .unwrap();
@@ -1193,9 +1219,9 @@ mod tests {
             .expect("frame");
         let webp = encoder.finalize(200).expect("finalizes");
         let dir = std::env::temp_dir().join(format!("zapfast-ghost-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        crate::platform::sfs::create_dir_all(&dir).expect("dir");
         let path = dir.join("moving.webp");
-        std::fs::write(&path, &webp).expect("writes");
+        crate::platform::sfs::write(&path, &webp).expect("writes");
         let decoded = decode(&path, MAX_FRAMES).expect("decodes");
         assert_eq!(decoded.frames.len(), 2);
         let second = &decoded.frames[1].0;
@@ -1203,17 +1229,17 @@ mod tests {
         assert_eq!(old.a(), 0, "the first frame's square is gone: {old:?}");
         let new = second.pixels[48 * second.width() + 48];
         assert!(new.a() > 200, "the second frame's square shows: {new:?}");
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
     fn animated_webp_decodes_into_frames() {
         // Two frames 100 ms apart.
         let dir = std::env::temp_dir().join(format!("zapfast-anim-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        crate::platform::sfs::create_dir_all(&dir).expect("dir");
         let path = dir.join("two.gif");
         {
-            let file = std::fs::File::create(&path).expect("file");
+            let file = crate::platform::sfs::File::create(&path).expect("file");
             let mut encoder = image::codecs::gif::GifEncoder::new(file);
             encoder
                 .set_repeat(image::codecs::gif::Repeat::Infinite)
@@ -1231,7 +1257,7 @@ mod tests {
         let decoded = decode(&path, MAX_FRAMES).expect("decodes");
         assert_eq!(decoded.frames.len(), 2);
         assert_eq!(decoded.frames[0].1, Duration::from_millis(100));
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1240,7 +1266,7 @@ mod tests {
             return;
         }
         let dir = std::env::temp_dir().join(format!("zapfast-mp4-vfr-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        crate::platform::sfs::create_dir_all(&dir).expect("dir");
         let path = dir.join("variable.mp4");
         let made = Command::new("ffmpeg")
             .args([
@@ -1282,31 +1308,31 @@ mod tests {
         assert_eq!(decoded.frames[0].0.size, [64, 48]);
         let total: Duration = decoded.frames.iter().map(|(_, delay)| *delay).sum();
         assert_eq!(total, Duration::from_millis(2800), "the whole loop plays");
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_still_webp_is_not_an_animation() {
         let dir = std::env::temp_dir().join(format!("zapfast-still-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        crate::platform::sfs::create_dir_all(&dir).expect("dir");
         let path = dir.join("still.webp");
         image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
             .save(&path)
             .expect("saves");
         assert!(decode(&path, MAX_FRAMES).is_none());
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_webp_announcing_an_animation_shows_its_only_frame() {
         // Some sticker makers wrap one still frame in the animation container.
         let dir = std::env::temp_dir().join(format!("zapfast-one-frame-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        crate::platform::sfs::create_dir_all(&dir).expect("dir");
         let still = dir.join("still.webp");
         image::RgbaImage::from_pixel(4, 4, image::Rgba([1, 2, 3, 255]))
             .save(&still)
             .expect("saves");
-        let bytes = std::fs::read(&still).expect("reads");
+        let bytes = crate::platform::sfs::read(&still).expect("reads");
         // The still's bitstream chunk becomes the animation's one frame.
         let mut at = 12;
         let bitstream = loop {
@@ -1345,11 +1371,11 @@ mod tests {
         webp.extend(body);
         assert!(webp_moves(&webp));
         let path = dir.join("one-frame.webp");
-        std::fs::write(&path, &webp).expect("writes");
+        crate::platform::sfs::write(&path, &webp).expect("writes");
         let decoded = decode(&path, MAX_FRAMES).expect("decodes");
         assert_eq!(decoded.frames.len(), 1);
         assert!(decode(&still, MAX_FRAMES).is_none(), "a plain still is not");
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1844,7 +1870,8 @@ mod tests {
     #[test]
     fn a_sticker_with_metadata_before_its_frames_still_plays() {
         let dir = tempfile::tempdir().expect("temp");
-        let plain = std::fs::read(animated_webp(dir.path(), "plain.webp", 3)).expect("reads");
+        let plain =
+            crate::platform::sfs::read(animated_webp(dir.path(), "plain.webp", 3)).expect("reads");
         assert_eq!(&plain[12..16], b"VP8X");
         let mut bytes = plain[..30].to_vec();
         bytes[20] |= 0x08;
@@ -1855,7 +1882,7 @@ mod tests {
         let size = (bytes.len() - 8) as u32;
         bytes[4..8].copy_from_slice(&size.to_le_bytes());
         let path = dir.path().join("sticker.webp");
-        std::fs::write(&path, &bytes).expect("writes");
+        crate::platform::sfs::write(&path, &bytes).expect("writes");
         assert!(webp_moves(&bytes));
         let decoded = decode(&path, MAX_FRAMES).expect("decodes");
         assert_eq!(decoded.frames.len(), 3);
@@ -1888,7 +1915,7 @@ mod tests {
         }
         let webp = encoder.finalize(count * 40).expect("finalizes");
         let path = dir.join(name);
-        std::fs::write(&path, &*webp).expect("writes");
+        crate::platform::sfs::write(&path, &*webp).expect("writes");
         path
     }
 
@@ -1980,7 +2007,7 @@ mod tests {
         // between the sticker and its placeholder for as long as the picker
         // stayed open (#165).
         let dir = std::env::temp_dir().join(format!("zapfast-budget-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        crate::platform::sfs::create_dir_all(&dir).expect("dir");
         let per_file = 80;
         let paths: Vec<_> = (0..MAX_RESIDENT_FRAMES / per_file as usize + 2)
             .map(|index| animated_webp(&dir, &format!("tile-{index}.webp"), per_file))
@@ -2004,13 +2031,13 @@ mod tests {
             assert_eq!(playing.frames.len(), 1, "a paused sticker holds its poster");
         }
         drop(animations);
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
     fn a_poster_plays_every_frame_without_a_placeholder_in_between() {
         let dir = std::env::temp_dir().join(format!("zapfast-poster-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
+        crate::platform::sfs::create_dir_all(&dir).expect("dir");
         let paths = vec![animated_webp(&dir, "hover.webp", 3)];
         let ctx = egui::Context::default();
         settle(&ctx, &paths, false);
@@ -2043,7 +2070,7 @@ mod tests {
         };
         assert_eq!(playing.frames.len(), 3);
         drop(animations);
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
@@ -2162,7 +2189,7 @@ mod probe {
         );
         assert!(!decoded.frames.is_empty());
         let started = Instant::now();
-        let bytes = std::fs::read(&path).expect("the file");
+        let bytes = crate::platform::sfs::read(&path).expect("the file");
         let poster = poster(&bytes).expect("its size and length");
         eprintln!(
             "poster {:?} of {}x{}, {} s, in {:?}",

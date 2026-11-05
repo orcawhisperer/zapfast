@@ -8,6 +8,7 @@
 //! and moving the profile keeps every pack intact. Deleting a local pack
 //! removes its copies only.
 
+use crate::platform::FilePath as _;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -33,12 +34,12 @@ struct Manifest {
 }
 
 fn read_manifest(dir: &Path) -> Option<Manifest> {
-    serde_json::from_slice(&std::fs::read(dir.join(MANIFEST)).ok()?).ok()
+    serde_json::from_slice(&crate::platform::sfs::read(dir.join(MANIFEST)).ok()?).ok()
 }
 
 fn write_manifest(dir: &Path, manifest: &Manifest) -> Result<(), String> {
     let json = serde_json::to_vec_pretty(manifest).map_err(|error| error.to_string())?;
-    std::fs::write(dir.join(MANIFEST), json).map_err(|error| error.to_string())
+    crate::platform::sfs::write(dir.join(MANIFEST), json).map_err(|error| error.to_string())
 }
 
 /// Lowercase hex SHA-256 of a sticker's bytes, its identity everywhere.
@@ -56,7 +57,7 @@ fn is_webp(path: &Path) -> bool {
 }
 
 fn modified(path: &Path) -> std::time::SystemTime {
-    std::fs::metadata(path)
+    crate::platform::sfs::metadata(path)
         .and_then(|metadata| metadata.modified())
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
@@ -65,18 +66,18 @@ fn modified(path: &Path) -> std::time::SystemTime {
 /// order even as stickers are added, and an empty local pack still lists so
 /// it can receive its first sticker.
 pub fn packs(root: &Path) -> Vec<StickerPack> {
-    let Ok(entries) = std::fs::read_dir(root) else {
+    let Ok(entries) = crate::platform::sfs::read_dir(root) else {
         return Vec::new();
     };
     let mut packs: Vec<(i64, StickerPack)> = entries
         .flatten()
         .filter_map(|entry| {
             let dir = entry.path();
-            if !dir.is_dir() {
+            if !dir.found_folder() {
                 return None;
             }
             let manifest = read_manifest(&dir);
-            let mut stickers: Vec<PathBuf> = std::fs::read_dir(&dir)
+            let mut stickers: Vec<PathBuf> = crate::platform::sfs::read_dir(&dir)
                 .ok()?
                 .flatten()
                 .map(|file| file.path())
@@ -150,19 +151,19 @@ pub fn set_member(pack: &Path, sticker: &Path, member: bool) -> Result<(), Strin
     let mut manifest = read_manifest(pack)
         .filter(|manifest| manifest.local)
         .ok_or("Only packs made in ZapFast can change")?;
-    let bytes = std::fs::read(sticker).map_err(|error| error.to_string())?;
+    let bytes = crate::platform::sfs::read(sticker).map_err(|error| error.to_string())?;
     let file = format!("{}.webp", content_hash(&bytes));
     let target = pack.join(&file);
     if member {
-        if !target.exists() {
-            std::fs::write(&target, &bytes).map_err(|error| error.to_string())?;
+        if !target.found() {
+            crate::platform::sfs::write(&target, &bytes).map_err(|error| error.to_string())?;
         }
         if !manifest.stickers.contains(&file) {
             manifest.stickers.push(file);
         }
     } else {
-        if target.exists() {
-            std::fs::remove_file(&target).map_err(|error| error.to_string())?;
+        if target.found() {
+            crate::platform::sfs::remove_file(&target).map_err(|error| error.to_string())?;
         }
         manifest.stickers.retain(|listed| *listed != file);
     }
@@ -171,7 +172,7 @@ pub fn set_member(pack: &Path, sticker: &Path, member: bool) -> Result<(), Strin
 
 /// Saved sticker files, newest first.
 pub fn saved(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
+    let Ok(entries) = crate::platform::sfs::read_dir(dir) else {
         return Vec::new();
     };
     let mut saved: Vec<(std::time::SystemTime, PathBuf)> = entries
@@ -187,12 +188,12 @@ pub fn saved(dir: &Path) -> Vec<PathBuf> {
 /// Saves a sticker under its content hash to deduplicate copies, and
 /// returns that hash.
 pub fn save(dir: &Path, path: &Path) -> Result<String, String> {
-    let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
-    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    let bytes = crate::platform::sfs::read(path).map_err(|error| error.to_string())?;
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let hash = content_hash(&bytes);
     let target = dir.join(format!("{hash}.webp"));
-    if !target.exists() {
-        std::fs::write(&target, &bytes).map_err(|error| error.to_string())?;
+    if !target.found() {
+        crate::platform::sfs::write(&target, &bytes).map_err(|error| error.to_string())?;
     }
     Ok(hash)
 }
@@ -202,9 +203,9 @@ mod tests {
     use super::*;
 
     fn sticker(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
-        std::fs::create_dir_all(dir).expect("dirs");
+        crate::platform::sfs::create_dir_all(dir).expect("dirs");
         let path = dir.join(name);
-        std::fs::write(&path, bytes).expect("writes");
+        crate::platform::sfs::write(&path, bytes).expect("writes");
         path
     }
 
@@ -252,7 +253,7 @@ mod tests {
         let packs_root = root.path().join("packs");
         let imported = packs_root.join("Frogs");
         sticker(&imported, "000.webp", b"frog");
-        std::fs::create_dir_all(packs_root.join("Empty")).expect("dirs");
+        crate::platform::sfs::create_dir_all(packs_root.join("Empty")).expect("dirs");
         let loose = sticker(root.path(), "x.webp", b"x");
         assert!(set_member(&imported, &loose, true).is_err());
         let listed = packs(&packs_root);

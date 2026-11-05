@@ -679,7 +679,7 @@ impl Settings {
     }
 
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
+        match crate::platform::sfs::read_to_string(path) {
             Ok(contents) => match serde_json::from_str::<Self>(&contents) {
                 Ok(mut settings) => {
                     settings.migrate();
@@ -879,7 +879,7 @@ impl AccountSettings {
     }
 
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
+        match crate::platform::sfs::read_to_string(path) {
             Ok(contents) => serde_json::from_str(&contents).unwrap_or_else(|error| {
                 log::warn!("account settings are unreadable, using the defaults: {error}");
                 Self::default()
@@ -923,7 +923,7 @@ impl Default for AccountRoster {
 
 impl AccountRoster {
     pub fn load(path: &Path) -> std::io::Result<Self> {
-        let mut roster = match std::fs::read_to_string(path) {
+        let mut roster = match crate::platform::sfs::read_to_string(path) {
             Ok(contents) => serde_json::from_str(&contents).map_err(std::io::Error::other)?,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::default(),
             Err(error) => return Err(error),
@@ -981,7 +981,7 @@ mod tests {
         assert_eq!(Settings::load(&missing_path).theme, ThemeChoice::System);
 
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, "{}").unwrap();
+        crate::platform::sfs::write(&path, "{}").unwrap();
         assert_eq!(Settings::load(&path).theme, ThemeChoice::System);
     }
 
@@ -1049,7 +1049,7 @@ mod tests {
         settings.save(&path).unwrap();
         // Releases before Messages read the file, and see Follow system.
         let written: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            serde_json::from_str(&crate::platform::sfs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(written["theme"], "system");
         assert_eq!(written["messages_theme"], true);
         assert_eq!(Settings::load(&path).theme, ThemeChoice::Messages);
@@ -1060,7 +1060,7 @@ mod tests {
         };
         system.save(&path).unwrap();
         assert!(
-            !std::fs::read_to_string(&path)
+            !crate::platform::sfs::read_to_string(&path)
                 .unwrap()
                 .contains("messages_theme")
         );
@@ -1160,10 +1160,11 @@ mod tests {
     fn load_from(contents: &str) -> (Settings, serde_json::Value) {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, contents).unwrap();
+        crate::platform::sfs::write(&path, contents).unwrap();
         let settings = Settings::load(&path);
         settings.save(&path).unwrap();
-        let stored = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let stored =
+            serde_json::from_str(&crate::platform::sfs::read_to_string(&path).unwrap()).unwrap();
         (settings, stored)
     }
 
@@ -1242,12 +1243,12 @@ mod tests {
         settings.save(&path).expect("saves");
         assert_eq!(Settings::load(&path), settings);
         assert!(
-            std::fs::read_to_string(&path)
+            crate::platform::sfs::read_to_string(&path)
                 .expect("reads")
                 .contains(r#""interface_language": "de""#),
             "the language keeps its stable serde name"
         );
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = crate::platform::sfs::remove_dir_all(dir);
     }
 
     #[test]
@@ -1270,13 +1271,13 @@ mod tests {
     fn legacy_locked_chat_code_is_rewritten_as_a_verifier() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
-        std::fs::write(&path, r#"{"chat_lock_code":"1234"}"#).unwrap();
+        crate::platform::sfs::write(&path, r#"{"chat_lock_code":"1234"}"#).unwrap();
         let settings = Settings::load(&path);
         assert!(settings.verifies_chat_lock_code("1234"));
         // The random hex verifier may contain "1234" by chance, so check
         // fields rather than searching the file for the digits.
         let stored: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            serde_json::from_str(&crate::platform::sfs::read_to_string(path).unwrap()).unwrap();
         assert!(stored.get("chat_lock_code").is_none());
         let verifier = stored["chat_lock_code_hash"].as_str().unwrap();
         assert_ne!(verifier.trim(), "1234");
@@ -1434,9 +1435,9 @@ mod tests {
     fn a_broken_roster_file_does_not_become_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("accounts.json");
-        std::fs::write(&path, "{").unwrap();
+        crate::platform::sfs::write(&path, "{").unwrap();
         assert!(AccountRoster::load(&path).is_err());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{");
+        assert_eq!(crate::platform::sfs::read_to_string(&path).unwrap(), "{");
     }
 
     #[test]

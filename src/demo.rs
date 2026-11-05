@@ -6,6 +6,7 @@ pub mod tour;
 #[cfg(test)]
 mod focus_trace;
 
+use crate::platform::FilePath as _;
 use std::collections::HashMap;
 
 use crate::app::{App, Conversation, Presence};
@@ -297,7 +298,7 @@ fn message(chat: &str, id: &str, from_me: bool, timestamp: i64, content: Content
 /// Writes sample attachments and generated profile pictures to disk.
 fn plant_avatars(app: &mut App) {
     let dir = app.dirs.avatar_cache_dir();
-    if std::fs::create_dir_all(&dir).is_err() {
+    if crate::platform::sfs::create_dir_all(&dir).is_err() {
         return;
     }
     let mut everyone: Vec<String> = sample_ids().iter().map(|id| (*id).to_owned()).collect();
@@ -318,7 +319,7 @@ fn plant_avatars(app: &mut App) {
             continue;
         }
         let path = dir.join(name);
-        if !path.exists() {
+        if !path.found() {
             let picture = painted_avatar(&id);
             if picture.save(&path).is_err() {
                 continue;
@@ -970,7 +971,7 @@ pub fn populate(app: &mut App) {
         vec![(
             group_members[1].0.to_owned(),
             crate::model::ChatActivity::Typing,
-            std::time::Instant::now(),
+            crate::platform::Instant::now(),
         )],
     );
     app.presence.insert(
@@ -1039,7 +1040,7 @@ fn shared_pack_sample(app: &mut App, open: bool) {
 /// way WhatsApp tags them, a Signal-style pack, and a pack made here.
 fn sticker_sample(app: &mut App, shelf: crate::model::StickerShelf, search: &str) {
     let dir = app.dirs.media_cache_dir().join("demo-stickers");
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::platform::sfs::create_dir_all(&dir);
     let make = |character: char| -> Option<std::path::PathBuf> {
         let path = dir.join(format!("{:x}.webp", character as u32));
         if let Some(sticker) = stock::sticker(character) {
@@ -1055,7 +1056,7 @@ fn sticker_sample(app: &mut App, shelf: crate::model::StickerShelf, search: &str
                 &tagged,
             ));
         }
-        if !path.exists() {
+        if !path.found() {
             let emoji = tour::media::emoji_image(character, 150).ok()?;
             let mut tile = image::RgbaImage::new(192, 192);
             image::imageops::overlay(&mut tile, &emoji, 21, 21);
@@ -1067,7 +1068,7 @@ fn sticker_sample(app: &mut App, shelf: crate::model::StickerShelf, search: &str
                 emojis: vec![character.to_string()],
                 ..Default::default()
             };
-            std::fs::write(&path, crate::sticker_meta::write(&webp, &info)?).ok()?;
+            crate::platform::sfs::write(&path, crate::sticker_meta::write(&webp, &info)?).ok()?;
         }
         Some(path)
     };
@@ -1101,7 +1102,7 @@ fn sticker_sample(app: &mut App, shelf: crate::model::StickerShelf, search: &str
         .chain(&app.stickers_received)
         .chain(app.sticker_packs.iter().flat_map(|pack| &pack.stickers))
         .filter_map(|path| {
-            let emojis = crate::sticker_meta::emojis(&std::fs::read(path).ok()?);
+            let emojis = crate::sticker_meta::emojis(&crate::platform::sfs::read(path).ok()?);
             Some((path.clone(), emojis))
         })
         .collect();
@@ -1198,9 +1199,16 @@ fn meta_ai_sample(app: &mut App) {
 fn animated_sticker_sample(app: &mut App) {
     sticker_sample(app, crate::model::StickerShelf::Recent, "");
     let dir = app.dirs.media_cache_dir().join("demo-stickers");
+    #[cfg(target_arch = "wasm32")]
+    let make = |_character: char| -> Option<std::path::PathBuf> {
+        // Encoding them takes libwebp, which a page does not have.
+        let _ = &dir;
+        None
+    };
+    #[cfg(not(target_arch = "wasm32"))]
     let make = |character: char| -> Option<std::path::PathBuf> {
         let path = dir.join(format!("{:x}-bounce.webp", character as u32));
-        if !path.exists() {
+        if !path.found() {
             let emoji = tour::media::emoji_image(character, 132).ok()?;
             let mut encoder = webp_animation::Encoder::new((192, 192)).ok()?;
             let frames = 30;
@@ -1212,7 +1220,7 @@ fn animated_sticker_sample(app: &mut App) {
                 encoder.add_frame(&tile, index * 50).ok()?;
             }
             let webp = encoder.finalize(frames * 50).ok()?;
-            std::fs::write(&path, &*webp).ok()?;
+            crate::platform::sfs::write(&path, &*webp).ok()?;
         }
         Some(path)
     };
@@ -1628,7 +1636,7 @@ fn photos_sample(app: &mut App) {
     let id = SAMPLES[0].id;
     let now = crate::util::now();
     let dir = app.dirs.media_cache_dir();
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::platform::sfs::create_dir_all(&dir);
     // Light towards the top; the time sits over the dark of its lower corner.
     let wide = stock::save_photo(&dir, stock::DUSK);
     let photo = |caption: Option<&str>| {
@@ -1692,7 +1700,7 @@ fn bubbles_sample(app: &mut App) {
     let id = SAMPLES[0].id;
     let now = crate::util::now();
     let dir = app.dirs.media_cache_dir();
-    let _ = std::fs::create_dir_all(&dir);
+    let _ = crate::platform::sfs::create_dir_all(&dir);
     let wide = stock::save_photo(&dir, stock::DUSK);
     let photo = || {
         let mut media = media(
@@ -3638,12 +3646,12 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                         (
                             "491702222222@s.whatsapp.net".to_owned(),
                             crate::model::ChatActivity::Typing,
-                            std::time::Instant::now(),
+                            crate::platform::Instant::now(),
                         ),
                         (
                             "491703333333@s.whatsapp.net".to_owned(),
                             crate::model::ChatActivity::Typing,
-                            std::time::Instant::now(),
+                            crate::platform::Instant::now(),
                         ),
                     ],
                 );
@@ -3657,7 +3665,7 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     vec![(
                         chat.to_owned(),
                         crate::model::ChatActivity::RecordingAudio,
-                        std::time::Instant::now() + std::time::Duration::from_secs(3600),
+                        crate::platform::Instant::now() + std::time::Duration::from_secs(3600),
                     )],
                 );
             }
@@ -3731,8 +3739,9 @@ pub fn apply_flags(app: &mut App, page: Option<&str>) {
                     .collect();
                 let path = app.dirs.media_cache_dir().join("demo-voice.ogg");
                 if let Ok(bytes) = crate::voice::encode(&tone) {
-                    let _ = std::fs::create_dir_all(path.parent().expect("a directory"));
-                    let _ = std::fs::write(&path, bytes);
+                    let _ =
+                        crate::platform::sfs::create_dir_all(path.parent().expect("a directory"));
+                    let _ = crate::platform::sfs::write(&path, bytes);
                 }
                 let waveform = crate::voice::waveform(&tone);
                 let open = app.open_chat.clone().unwrap_or_default();
@@ -4388,7 +4397,7 @@ pub fn call_sample(app: &mut App, incoming: bool, video: bool) {
         // A call already up for three minutes and forty-one seconds, so the previews show the
         // duration the way a real one counts it.
         started: (!incoming)
-            .then(|| std::time::Instant::now() - std::time::Duration::from_secs(221)),
+            .then(|| crate::platform::Instant::now() - std::time::Duration::from_secs(221)),
         muted: false,
         camera_on: video,
         remote_video: video && !incoming,
@@ -13853,7 +13862,9 @@ mod tests {
         // Once the favorite copy arrives, the same button removes it.
         let copy = app.dirs.media_cache_dir().join(format!(
             "{}.webp",
-            crate::backend::sticker_store::content_hash(&std::fs::read(&received).unwrap())
+            crate::backend::sticker_store::content_hash(
+                &crate::platform::sfs::read(&received).unwrap()
+            )
         ));
         app.stickers_saved.push(copy.clone());
         render(&mut app, &ctx);
@@ -13936,7 +13947,7 @@ mod tests {
         downloads: &mut Vec<bool>,
         done: impl Fn(&App, &[bool]) -> bool,
     ) -> bool {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             render(app, ctx);
             downloads.extend(
@@ -13953,7 +13964,7 @@ mod tests {
             if done(app, downloads) {
                 return true;
             }
-            if std::time::Instant::now() > deadline {
+            if crate::platform::Instant::now() > deadline {
                 return false;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -13992,7 +14003,7 @@ mod tests {
     fn a_sticker_that_does_not_decode_retries_only_when_clicked() {
         for animated in [true, false] {
             let (mut app, ctx, events, path) = unreadable_sticker("broken.webp", animated);
-            std::fs::write(&path, b"not a sticker").unwrap();
+            crate::platform::sfs::write(&path, b"not a sticker").unwrap();
             let chat = app.open_chat.clone().unwrap();
             let failed = |app: &App, _: &[bool]| {
                 matches!(
@@ -14045,9 +14056,10 @@ mod tests {
                 );
                 assert_eq!(sticker_media(&app).path, None);
                 // Settled: no download starts by itself.
-                let settled = std::time::Instant::now() + std::time::Duration::from_millis(200);
+                let settled =
+                    crate::platform::Instant::now() + std::time::Duration::from_millis(200);
                 render_until(&mut app, &ctx, &mut downloads, |_, _| {
-                    std::time::Instant::now() > settled
+                    crate::platform::Instant::now() > settled
                 });
                 assert!(
                     downloads.is_empty(),
@@ -14060,11 +14072,11 @@ mod tests {
                 }
             }
             // This time a good copy arrives under the same name.
-            std::fs::write(&path, stock::ANIMATED_STICKER).unwrap();
+            crate::platform::sfs::write(&path, stock::ANIMATED_STICKER).unwrap();
             arrives(&events);
-            let shown = std::time::Instant::now() + std::time::Duration::from_millis(500);
+            let shown = crate::platform::Instant::now() + std::time::Duration::from_millis(500);
             render_until(&mut app, &ctx, &mut downloads, |app, _| {
-                sticker_media(app).path.is_none() || std::time::Instant::now() > shown
+                sticker_media(app).path.is_none() || crate::platform::Instant::now() > shown
             });
             let media = sticker_media(&app);
             assert_eq!(media.path.as_ref(), Some(&path), "animated: {animated}");
@@ -14114,8 +14126,8 @@ mod tests {
         let first = drawn(&mut app);
         assert!(app.sticker_view.as_ref().expect("open").animated());
         let mut seen = std::collections::HashSet::new();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while seen.len() < 3 && std::time::Instant::now() < deadline {
+        let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(10);
+        while seen.len() < 3 && crate::platform::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(30));
             seen.extend(drawn(&mut app).difference(&first).copied());
         }
@@ -14259,7 +14271,7 @@ mod tests {
         app.attach(&ctx);
         let (photo, _) = sample_files(&app);
         let long = photo.with_file_name(name);
-        std::fs::copy(&photo, &long).unwrap();
+        crate::platform::sfs::copy(&photo, &long).unwrap();
         // A chat with no name, so the viewer's title is the file's name. The
         // viewer shows the open chat's media and closes when it is left.
         app.open_chat = Some("unknown@s.whatsapp.net".into());
@@ -16740,7 +16752,7 @@ mod tests {
             message: "key-fixture".into(),
             path: sample_video(),
         });
-        let started = std::time::Instant::now();
+        let started = crate::platform::Instant::now();
         while clicked
             .app
             .video
@@ -18360,7 +18372,7 @@ mod tests {
         let mut app = app();
         app.toast("Copied");
         app.toast_error("Could not open the folder: permission denied");
-        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(60);
+        let long_ago = crate::platform::Instant::now() - std::time::Duration::from_secs(60);
         for toast in &mut app.toasts {
             toast.created = long_ago;
         }
@@ -19018,7 +19030,7 @@ mod tests {
             vec![(
                 chat.clone(),
                 crate::model::ChatActivity::Typing,
-                std::time::Instant::now() + std::time::Duration::from_secs(3600),
+                crate::platform::Instant::now() + std::time::Duration::from_secs(3600),
             )],
         );
         render(&mut app, &ctx);
@@ -24434,7 +24446,7 @@ mod picture_edge_tests {
         // Wait for the actual decode before measuring stability. A fixed
         // sleep can expire before the loader runs on a busy CI host.
         let uri = crate::util::image_uri(&photo);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(10);
         loop {
             frame(&mut app);
             if matches!(
@@ -24448,7 +24460,7 @@ mod picture_edge_tests {
                 break;
             }
             assert!(
-                std::time::Instant::now() < deadline,
+                crate::platform::Instant::now() < deadline,
                 "the sample picture did not decode"
             );
             std::thread::sleep(std::time::Duration::from_millis(5));

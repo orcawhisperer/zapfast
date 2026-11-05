@@ -1,6 +1,9 @@
 //! SQLCipher archive storage and automatic OS-keyring unlock.
 
-use std::{fs, io::Read, path::Path};
+use crate::platform::FilePath as _;
+use crate::platform::sfs as fs;
+
+use std::{io::Read, path::Path};
 
 use anyhow::{Context, Result, ensure};
 use keyring_core::api::CredentialStoreApi;
@@ -54,7 +57,7 @@ fn copy_archive_key_in(
     let new_parent = new_archive
         .parent()
         .context("Archive has no parent directory")?;
-    if !old_parent.exists() {
+    if !old_parent.found() {
         return Ok(());
     }
     fs::create_dir_all(new_parent)?;
@@ -145,6 +148,9 @@ fn platform_store() -> Result<std::sync::Arc<dyn CredentialStoreApi>> {
     let store = apple_native_keyring_store::keychain::Store::new();
     #[cfg(windows)]
     let store = windows_native_keyring_store::Store::new();
+    #[cfg(target_arch = "wasm32")]
+    let store: keyring_core::Result<std::sync::Arc<dyn CredentialStoreApi>> =
+        Err(keyring_core::Error::NoDefaultStore);
     Ok(store
         .map_err(keyring_error)
         .context("Unlock your OS keyring and restart ZapFast")?
@@ -158,7 +164,7 @@ fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<
             // Start over moves the unreadable archive aside but leaves its
             // credential behind. Replace an invalid credential only when no
             // archive remains at this path, never while protecting an archive.
-            if secret.len() != 32 && !path.try_exists()? {
+            if secret.len() != 32 && !path.checked_found()? {
                 return create_key(entry);
             }
             ensure!(
@@ -287,7 +293,7 @@ pub(super) fn open(path: &Path, key: &[u8; 32]) -> Result<Connection> {
         fs::create_dir_all(parent)?;
     }
     let staging = path.with_extension("db.encrypting");
-    if !path.exists() {
+    if !path.found() {
         private_file(path)?;
     } else if fs::metadata(path)?.len() > 0 && plaintext(path)? {
         // Keep the original authoritative until the exported copy is complete.
@@ -302,7 +308,7 @@ pub(super) fn open(path: &Path, key: &[u8; 32]) -> Result<Connection> {
             "Close other programs using the archive before migrating it"
         );
         source.pragma_update(None, "temp_store", "MEMORY")?;
-        if staging.try_exists()? {
+        if staging.checked_found()? {
             fs::remove_file(&staging)?;
         }
         private_file(&staging)?;
@@ -342,7 +348,7 @@ pub(super) fn open(path: &Path, key: &[u8; 32]) -> Result<Connection> {
         }
     }
     let connection = keyed(path, key)?;
-    if staging.try_exists()? {
+    if staging.checked_found()? {
         fs::remove_file(staging)?;
     }
     Ok(connection)

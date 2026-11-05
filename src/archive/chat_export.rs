@@ -1,5 +1,6 @@
 //! Stream one chat to a readable file, optionally with its already-saved attachments.
 
+use crate::platform::FilePath as _;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,7 +24,7 @@ pub struct Counts {
 impl Archive {
     /// A separate, verified SQLCipher reader. No migrations or new archive may be created.
     pub(crate) fn export_reader(path: &Path) -> Result<Self> {
-        ensure!(path.is_file(), "The archive is unavailable");
+        ensure!(path.found_file(), "The archive is unavailable");
         let key = super::encryption::key_for(path)?;
         Ok(Self {
             connection: super::encryption::read_only(path, &key)?,
@@ -129,7 +130,7 @@ impl Archive {
                             writeln!(transcript, "  {name} (attachment unavailable)")?;
                             continue;
                         };
-                        let mut source = match std::fs::File::open(&path) {
+                        let mut source = match crate::platform::sfs::File::open(&path) {
                             Ok(file) => file,
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                                 counts.missing += 1;
@@ -383,7 +384,7 @@ mod tests {
             .export_chat(CHAT, &target, false, &AtomicBool::new(false), |_| {})
             .unwrap();
         assert_eq!(counts.messages, 270);
-        let text = std::fs::read_to_string(target).unwrap();
+        let text = crate::platform::sfs::read_to_string(target).unwrap();
         assert_eq!(text.matches("第二行").count(), 270);
         assert!(text.find("line 0\n").unwrap() < text.find("line 269\n").unwrap());
         assert!(text.contains("Áda Fixture"));
@@ -397,7 +398,7 @@ mod tests {
         let archive = fixture();
         let directory = tempfile::tempdir().unwrap();
         let source = directory.path().join("source.pdf");
-        std::fs::write(&source, b"fixture bytes").unwrap();
+        crate::platform::sfs::write(&source, b"fixture bytes").unwrap();
         for id in ["first", "second"] {
             archive
                 .insert_message(
@@ -430,7 +431,8 @@ mod tests {
                 missing: 1
             }
         );
-        let mut zip = zip::ZipArchive::new(std::fs::File::open(target).unwrap()).unwrap();
+        let mut zip =
+            zip::ZipArchive::new(crate::platform::sfs::File::open(target).unwrap()).unwrap();
         assert_eq!(zip.len(), 3);
         let mut names = Vec::new();
         for index in 0..zip.len() {
@@ -467,7 +469,7 @@ mod tests {
         }
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("existing.zip");
-        std::fs::write(&target, b"original export").unwrap();
+        crate::platform::sfs::write(&target, b"original export").unwrap();
         let cancelled = AtomicBool::new(false);
         assert!(
             archive
@@ -475,8 +477,16 @@ mod tests {
                     .store(true, Ordering::Release))
                 .is_err()
         );
-        assert_eq!(std::fs::read(&target).unwrap(), b"original export");
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+        assert_eq!(
+            crate::platform::sfs::read(&target).unwrap(),
+            b"original export"
+        );
+        assert_eq!(
+            crate::platform::sfs::read_dir(directory.path())
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     /// Privacy denial or invalid archived content prevents publishing partial output.
@@ -515,7 +525,12 @@ mod tests {
                 .is_err()
         );
         assert!(!target.exists());
-        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 0);
+        assert_eq!(
+            crate::platform::sfs::read_dir(directory.path())
+                .unwrap()
+                .count(),
+            0
+        );
     }
 
     /// The export reader fails closed without a valid key and cannot create or modify an archive.

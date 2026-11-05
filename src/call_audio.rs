@@ -16,11 +16,12 @@
 //! the same when a device is renamed and tells apart two devices with the same name; the picker
 //! shows their names.
 
+use crate::platform::Instant;
 use std::num::NonZero;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rodio::buffer::SamplesBuffer;
 
@@ -586,7 +587,7 @@ impl AudioInput {
         // One per call, read by the test above and written by the pump below, so a reader that
         // survives a mute or a rebind is told from one that was started again.
         let opens = Arc::new(AtomicUsize::new(0));
-        tokio::spawn(mic_pump(
+        crate::platform::spawn(mic_pump(
             out,
             swaps,
             fell,
@@ -648,7 +649,7 @@ async fn mic_pump(
                 if out.is_closed() {
                     return;
                 }
-                tokio::time::sleep(RETRY).await;
+                crate::platform::time::sleep(RETRY).await;
                 continue;
             }
         };
@@ -904,7 +905,7 @@ impl AudioOutput {
         let stalls = Arc::new(AtomicUsize::new(0));
         let restarts = Arc::new(AtomicUsize::new(0));
         let relink = Arc::new(Mutex::new(None));
-        tokio::spawn(play_pump(
+        crate::platform::spawn(play_pump(
             rx,
             swaps,
             fell,
@@ -1023,7 +1024,7 @@ async fn play_pump(
                 if rx.is_closed() {
                     return;
                 }
-                tokio::time::sleep(RETRY).await;
+                crate::platform::time::sleep(RETRY).await;
                 continue;
             }
         };
@@ -1096,7 +1097,7 @@ async fn play_pump(
             // queued is already older than the restart, and playing it late would only add delay,
             // so it is dropped and the engine's channel refills at its own pace.
             while rx.try_recv().is_ok() {}
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            crate::platform::time::sleep(Duration::from_millis(100)).await;
             continue;
         }
         if played {
@@ -1238,7 +1239,7 @@ fn write_speaker(
     let mut last_position = Duration::ZERO;
     let mut quiet_since: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
-        let frame = match frames.recv_blocking() {
+        let frame = match crate::platform::recv_blocking(frames) {
             Ok(frame) => frame,
             // The pump dropped its end: the call is over, or the device is being changed.
             Err(_) => return,
@@ -1756,7 +1757,7 @@ mod tests {
         let mut got: Vec<Vec<i16>> = Vec::new();
         let started = Instant::now();
         while got.len() < 5 && started.elapsed() < Duration::from_secs(5) {
-            match tokio::time::timeout(Duration::from_millis(250), frames.recv()).await {
+            match crate::platform::time::timeout(Duration::from_millis(250), frames.recv()).await {
                 Ok(Ok(frame)) => got.push(frame),
                 // The pump dropped its port, which is the call ending rather than a slow frame.
                 Ok(Err(_)) => break,
@@ -1787,11 +1788,12 @@ mod tests {
         let (_devices, _speaker) = fake::install(samples, 1, 48_000, (48_000, 2));
         let (input, frames) = AudioInput::spawn(None, &FarEnd::new());
         // Answered a second and a half after the microphone opened.
-        tokio::time::sleep(Duration::from_millis(1_500)).await;
+        crate::platform::time::sleep(Duration::from_millis(1_500)).await;
         let mut got = 0_usize;
         let started = Instant::now();
         while started.elapsed() < Duration::from_millis(300) {
-            if let Ok(Ok(_)) = tokio::time::timeout(Duration::from_millis(20), frames.recv()).await
+            if let Ok(Ok(_)) =
+                crate::platform::time::timeout(Duration::from_millis(20), frames.recv()).await
             {
                 got += 1;
             }
@@ -1925,12 +1927,12 @@ mod tests {
         // cannot read them.
         speaker.open_pause.store(400, Ordering::Relaxed);
         let (output, _tx) = AudioOutput::spawn(None, &FarEnd::new());
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        crate::platform::time::sleep(Duration::from_millis(80)).await;
         output.bind(Some("First".to_owned()));
         output.bind(Some("Second".to_owned()));
         let started = Instant::now();
         while speaker.opened_count() < 3 && started.elapsed() < Duration::from_secs(5) {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+            crate::platform::time::sleep(Duration::from_millis(20)).await;
         }
         let opened = speaker.opened();
         drop(output);
@@ -2219,7 +2221,7 @@ mod tests {
                 .await
                 .expect("the speaker pump is alive");
         }
-        tokio::time::sleep(Duration::from_millis(400)).await;
+        crate::platform::time::sleep(Duration::from_millis(400)).await;
         assert!(
             output.fell_back.try_recv().is_err(),
             "the default output accepted the frames"

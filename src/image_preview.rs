@@ -346,7 +346,7 @@ impl StickerPreview {
         let bytes = if lottie {
             None
         } else {
-            std::fs::read(&path).ok()
+            crate::platform::sfs::read(&path).ok()
         };
         Self {
             animated: lottie || bytes.as_deref().is_some_and(crate::animation::webp_moves),
@@ -487,7 +487,7 @@ mod tests {
     fn a_sticker_preview_finds_its_favorite_copy_by_content() {
         let dir = tempfile::tempdir().expect("temp");
         let received = dir.path().join("msg-1.webp");
-        std::fs::write(&received, b"sun").expect("writes");
+        crate::platform::sfs::write(&received, b"sun").expect("writes");
         let preview = StickerPreview::new(received);
         assert!(!preview.animated());
         let other = dir.path().join("saved").join("0000.webp");
@@ -512,7 +512,7 @@ mod tests {
         moving.extend_from_slice(b"ICCP\x00\x01\0\0");
         moving.extend(std::iter::repeat_n(0u8, 256));
         moving.extend_from_slice(b"ANIM");
-        std::fs::write(&path, &moving).expect("writes");
+        crate::platform::sfs::write(&path, &moving).expect("writes");
         assert!(StickerPreview::new(path).animated());
     }
 

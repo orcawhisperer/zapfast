@@ -161,7 +161,7 @@ impl CallVideo {
 
 /// One direction of a call's video, written as raw H.264, when [`DUMP_VARIABLE`] asks for it.
 pub struct Dump {
-    file: Mutex<Option<std::io::BufWriter<std::fs::File>>>,
+    file: Mutex<Option<std::io::BufWriter<crate::platform::sfs::File>>>,
 }
 
 impl Dump {
@@ -180,13 +180,14 @@ impl Dump {
         folder: &Path,
         call_id: &str,
         direction: &str,
-    ) -> Option<std::io::BufWriter<std::fs::File>> {
-        let started = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
+    ) -> Option<std::io::BufWriter<crate::platform::sfs::File>> {
+        let started = crate::platform::SystemTime::now()
+            .duration_since(crate::platform::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
         let path = dump_path(folder, started, call_id, direction);
-        let created = std::fs::create_dir_all(folder).and_then(|()| std::fs::File::create(&path));
+        let created = crate::platform::sfs::create_dir_all(folder)
+            .and_then(|()| crate::platform::sfs::File::create(&path));
         match created {
             Ok(file) => {
                 log::info!("[CALL] writing the {direction} video to {}", path.display());
@@ -311,10 +312,10 @@ mod tests {
         };
         dump.write(&keyframe());
         drop(dump);
-        let written = std::fs::read_dir(folder.path())
+        let written = crate::platform::sfs::read_dir(folder.path())
             .expect("listed")
             .flatten()
-            .map(|entry| std::fs::read(entry.path()).expect("read"))
+            .map(|entry| crate::platform::sfs::read(entry.path()).expect("read"))
             .next()
             .expect("written");
         assert_eq!(written, keyframe());

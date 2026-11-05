@@ -4,10 +4,11 @@
 //! its own thread because delivery and click handling can block. A click hands
 //! back the chat and the message it announced.
 
+use crate::platform::Instant;
 use crate::settings::NotificationSound;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub use fastframe_dock::Badge;
 #[cfg(target_os = "windows")]
@@ -326,10 +327,17 @@ fn sound_file(sound: &NotificationSound) -> Option<&'static str> {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn played_by_notification(_sound: &NotificationSound) -> bool {
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn played_by_notification(sound: &NotificationSound) -> bool {
     sound_file(sound).is_some_and(fastframe_notifications::bundled_sound_exists)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn native_sound(sound: &NotificationSound) -> fastframe_notifications::Sound {
     use fastframe_notifications::Sound;
     if *sound == NotificationSound::System {
@@ -350,9 +358,9 @@ pub fn play_sound(sound: NotificationSound) {
         NotificationSound::Receive => Box::new(|| Ok(Box::new(std::io::Cursor::new(RECEIVE)))),
         NotificationSound::Alert => Box::new(|| Ok(Box::new(std::io::Cursor::new(ALERT)))),
         NotificationSound::Custom(path) => Box::new(move || {
-            Ok(Box::new(std::io::BufReader::new(std::fs::File::open(
-                &path,
-            )?)))
+            Ok(Box::new(std::io::BufReader::new(
+                crate::platform::sfs::File::open(&path)?,
+            )))
         }),
         NotificationSound::System | NotificationSound::None => return,
     };
@@ -439,6 +447,24 @@ fn notification_app_id() -> &'static str {
 
 /// Fastframe owns the platform adapters and one bounded native worker. This
 /// thread only keeps ZapFast's account-scoped cancellation and click routing.
+/// A page's notifications are not wired up yet, so each reports it could not show.
+#[cfg(target_arch = "wasm32")]
+#[expect(clippy::too_many_arguments)]
+fn deliver(
+    _title: &str,
+    _body: &str,
+    _picture: Option<&std::path::Path>,
+    _sound: &NotificationSound,
+    _target: NotificationTarget,
+    _opened: Arc<Mutex<Vec<NotificationTarget>>>,
+    _wake: impl Fn() + Send + 'static,
+    _cancelled: tokio::sync::oneshot::Receiver<Stop>,
+    failed: impl FnOnce(),
+) {
+    failed();
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[expect(clippy::too_many_arguments)]
 fn deliver(
     title: &str,
@@ -795,9 +821,10 @@ mod tests {
     #[test]
     #[ignore = "shows a real notification"]
     fn shows_one_on_this_desktop() {
-        let picture = std::fs::read_dir(crate::paths::AppDirs::discover().avatar_cache_dir())
-            .ok()
-            .and_then(|entries| entries.flatten().map(|entry| entry.path()).next());
+        let picture =
+            crate::platform::sfs::read_dir(crate::paths::AppDirs::discover().avatar_cache_dir())
+                .ok()
+                .and_then(|entries| entries.flatten().map(|entry| entry.path()).next());
         let mut notifications = Notifications::default();
         notifications.show(
             "Ada Lovelace".into(),

@@ -36,7 +36,7 @@ pub fn shape(rect: egui::Rect, fade: f32) -> egui::Shape {
             // objects with it. A context that cannot frost is asked once.
             if is_stale(glass.as_ref().map(|(made_for, _)| made_for), gl) {
                 // SAFETY: called on the painting thread with its context current.
-                *glass = Some((Arc::clone(gl), unsafe { Glass::new(gl) }));
+                **glass = Some((Arc::clone(gl), unsafe { Glass::new(gl) }));
             }
             if let Some((_, Some(glass))) = glass.as_mut() {
                 // SAFETY: as above.
@@ -56,7 +56,29 @@ fn is_stale<T>(made_for: Option<&Arc<T>>, context: &Arc<T>) -> bool {
 
 /// The objects for the current context, kept with it, or nothing where it
 /// cannot run them.
-static GLASS: Mutex<Option<(Arc<glow::Context>, Option<Glass>)>> = Mutex::new(None);
+static GLASS: Mutex<Slot> = Mutex::new(Slot(None));
+
+/// What `GLASS` holds. WebGL objects are not `Send`, and a page paints on one
+/// thread, so there the slot may claim to be.
+struct Slot(Option<(Arc<glow::Context>, Option<Glass>)>);
+
+#[cfg(target_arch = "wasm32")]
+// SAFETY: wasm32-unknown-unknown without atomics has exactly one thread.
+unsafe impl Send for Slot {}
+
+impl std::ops::Deref for Slot {
+    type Target = Option<(Arc<glow::Context>, Option<Glass>)>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for Slot {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 /// One full-size and two small render targets, and the two programs.
 struct Glass {

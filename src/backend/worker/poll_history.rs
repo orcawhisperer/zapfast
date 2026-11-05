@@ -3,8 +3,10 @@
 use crate::model::ChatId;
 use std::{
     collections::{HashMap, VecDeque},
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use crate::platform::Instant;
 
 type Key = (ChatId, String);
 #[derive(Default)]

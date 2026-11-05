@@ -1126,7 +1126,7 @@ mod tests {
         }
         fn search(dir: &std::path::Path, depth: usize, names: &[&str]) -> Option<PathBuf> {
             let mut subdirs = Vec::new();
-            for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            for entry in crate::platform::sfs::read_dir(dir).ok()?.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
                     subdirs.push(path);
@@ -1881,13 +1881,15 @@ mod tests {
         fonts
             .font_data
             .insert("inter".into(), Arc::new(FontData::from_static(inter)));
-        let face = std::fs::read(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
+        let face =
+            crate::platform::sfs::read(path).unwrap_or_else(|error| panic!("read {path}: {error}"));
         fonts
             .font_data
             .insert("rtl-fallback".into(), Arc::new(FontData::from_owned(face)));
         if (path.contains("DejaVu") || path.contains("Liberation"))
-            && let Ok(arabic) =
-                std::fs::read("/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf")
+            && let Ok(arabic) = crate::platform::sfs::read(
+                "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf",
+            )
         {
             fonts
                 .font_data

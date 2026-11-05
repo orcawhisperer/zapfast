@@ -1,8 +1,9 @@
 //! Serial background phone-history prefetch.
 
 use crate::model::{Chat, ChatId, ChatKind};
+use crate::platform::Instant;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Time between background requests. Each one wakes the phone, and an iPhone
 /// says "Syncing with WhatsApp" for it, so they stay rare (#737).

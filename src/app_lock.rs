@@ -8,9 +8,10 @@
 //! checking or making one runs on its own thread because it takes tens of
 //! milliseconds.
 
+use crate::platform::Instant;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::settings::{hex, unhex};
 

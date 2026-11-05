@@ -797,7 +797,7 @@ impl Tour {
                 "height": ctx.content_rect().height(),
                 "duration": self.script.duration().as_secs(),
                 "complete": !self.failed, "events": self.trace });
-            if let Err(error) = std::fs::write(path, data.to_string()) {
+            if let Err(error) = crate::platform::sfs::write(path, data.to_string()) {
                 log::error!("could not write tour input trace: {error}");
             }
         }
@@ -837,8 +837,17 @@ impl egui::DroppedFile for Dropped {
         &self.0
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn bytes(&self) -> Result<Vec<u8>, String> {
-        std::fs::read(&self.0).map_err(|error| error.to_string())
+        crate::platform::sfs::read(&self.0).map_err(|error| error.to_string())
+    }
+
+    // The tour does not run in a page, which has no media folder.
+    #[cfg(target_arch = "wasm32")]
+    fn bytes_async(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<u8>, String>>>> {
+        Box::pin(async { Err("no files in the page's tour".to_owned()) })
     }
 }
 

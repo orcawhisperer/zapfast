@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ZapFast</title>
+    <style>
+      html, body { margin: 0; height: 100%; background: #111b21; overflow: hidden; }
+      canvas { display: block; width: 100%; height: 100%; outline: none; }
+      #failure { position: fixed; inset: 0 0 auto 0; padding: 16px; color: #e9edef;
+        font: 14px system-ui, sans-serif; white-space: pre-wrap; }
+      #failure:empty { display: none; }
+    </style>
+  </head>
+  <body>
+    <canvas id="zapfast"></canvas>
+    <div id="failure"></div>
+    <script type="module">
+      import init from "./zapfast-web.js";
+      init().catch((error) => {
+        document.getElementById("failure").textContent = String(error);
+      });
+    </script>
+  </body>
+</html>

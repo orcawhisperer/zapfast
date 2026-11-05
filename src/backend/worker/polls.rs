@@ -126,7 +126,7 @@ impl Worker {
             !anchor.is_empty()
         );
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             if client
                 .fetch_message_history(
                     &jid,
@@ -367,7 +367,7 @@ impl Worker {
         };
         let draft = draft.unwrap();
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = async {
                 let recipients = if jid.is_group() {
                     client
@@ -526,7 +526,7 @@ impl Worker {
         };
         self.poll_sending.insert(request);
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let at = jiff::Timestamp::now().as_millisecond();
             let result = client
                 .polls()
@@ -672,7 +672,7 @@ impl Worker {
             let client = client.clone();
             let commands = self.commands.clone();
             self.poll_decrypting += 1;
-            tokio::spawn(async move {
+            crate::platform::spawn(async move {
                 let choices = if let Some(value) = update.vote.as_option() {
                     let ciphertext = PollVoteCiphertext {
                         enc_payload: value.enc_payload.as_deref().unwrap_or_default(),
@@ -1095,7 +1095,7 @@ mod tests {
         worker.store_message(row.clone(), Some(raw.encode_to_vec()), None);
         worker.pump_poll_votes();
         assert_eq!(worker.poll_decrypting, 1);
-        let result = tokio::time::timeout(Duration::from_secs(5), commands.recv())
+        let result = crate::platform::time::timeout(Duration::from_secs(5), commands.recv())
             .await
             .unwrap()
             .unwrap();

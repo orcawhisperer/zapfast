@@ -152,7 +152,7 @@ impl Worker {
             self.favorite_chats.reading = true;
             let sender = self.wa_sender.clone();
             let generation = self.privacy_generation;
-            tokio::spawn(async move {
+            crate::platform::spawn(async move {
                 use whatsapp_rust::WAPatchName;
                 let complete = match client
                     .resync_app_state(
@@ -180,7 +180,7 @@ impl Worker {
         self.favorite_chats.sending = true;
         self.favorite_chats.overtaken = false;
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let at = jiff::Timestamp::now().as_millisecond();
             let value = favorites_value(&list, at);
             let result = client

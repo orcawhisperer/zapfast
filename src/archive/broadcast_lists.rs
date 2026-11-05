@@ -724,7 +724,7 @@ mod tests {
                  SELECT '1@s.whatsapp.net', 'd' || i, '1@s.whatsapp.net', i % 2, i, '{}' FROM n;",
             )
             .unwrap();
-        let started = std::time::Instant::now();
+        let started = crate::platform::Instant::now();
         let lists = archive.received_broadcast_lists().unwrap();
         let took = started.elapsed();
         assert_eq!(lists.len(), 1);
@@ -1158,7 +1158,7 @@ mod tests {
             .unwrap();
         connection.execute_batch("COMMIT").unwrap();
 
-        let started = std::time::Instant::now();
+        let started = crate::platform::Instant::now();
         let lists = archive.received_broadcast_lists().unwrap();
         let scan = started.elapsed();
         let mut moves = Vec::new();
@@ -1167,11 +1167,11 @@ mod tests {
                 .iter()
                 .map(|sender| (sender.clone(), sender.clone(), "fixture".to_owned()))
                 .collect();
-            let started = std::time::Instant::now();
+            let started = crate::platform::Instant::now();
             let adopted = archive.adopt_broadcast_list(list, &names).unwrap();
             moves.push((senders.len(), adopted, started.elapsed()));
         }
-        let started = std::time::Instant::now();
+        let started = crate::platform::Instant::now();
         let again = archive.received_broadcast_lists().unwrap();
         eprintln!(
             "scan {scan:?} for {} lists; moves {moves:?}; next start {:?} for {} lists",

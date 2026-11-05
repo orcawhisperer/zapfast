@@ -335,7 +335,7 @@ fn bounded(image: image::DynamicImage) -> image::DynamicImage {
 /// stored as JPEG, or PNG when it has transparency; a smaller one is copied as
 /// it is. Earlier copies are removed once the new one is in place.
 pub fn import(source: &Path, state: &Path) -> Result<PathBuf, String> {
-    let bytes = std::fs::read(source).map_err(|error| error.to_string())?;
+    let bytes = crate::platform::sfs::read(source).map_err(|error| error.to_string())?;
     let format = image::guess_format(&bytes).map_err(|_| "not an image".to_owned())?;
     let decoded =
         image::load_from_memory_with_format(&bytes, format).map_err(|error| error.to_string())?;
@@ -354,7 +354,7 @@ pub fn import(source: &Path, state: &Path) -> Result<PathBuf, String> {
     let target = state.join(format!("wallpaper.{extension}"));
     fastframe_file::write(&target, contents).map_err(|error| error.to_string())?;
     for other in EXTENSIONS.into_iter().filter(|other| *other != extension) {
-        let _ = std::fs::remove_file(state.join(format!("wallpaper.{other}")));
+        let _ = crate::platform::sfs::remove_file(state.join(format!("wallpaper.{other}")));
     }
     Ok(target)
 }
@@ -381,7 +381,7 @@ fn encode(image: &image::DynamicImage) -> Result<(Vec<u8>, &'static str), String
 /// Deletes ZapFast's copy of the wallpaper image, whatever its extension.
 pub fn remove(state: &Path) {
     for extension in EXTENSIONS {
-        match std::fs::remove_file(state.join(format!("wallpaper.{extension}"))) {
+        match crate::platform::sfs::remove_file(state.join(format!("wallpaper.{extension}"))) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => log::debug!("could not delete the wallpaper image: {error}"),
@@ -486,8 +486,8 @@ mod tests {
         let small = import(&chosen, &dirs.state).unwrap();
         assert_eq!(small, dirs.wallpaper_file("png"));
         assert_eq!(
-            std::fs::read(&small).unwrap(),
-            std::fs::read(&chosen).unwrap()
+            crate::platform::sfs::read(&small).unwrap(),
+            crate::platform::sfs::read(&chosen).unwrap()
         );
         assert_eq!(decode(&small).unwrap().size, [64, 32]);
         assert!(chosen.exists(), "the original stays where it was");
@@ -505,14 +505,17 @@ mod tests {
 
         // Something that is not an image is refused and the copy survives.
         let text = root.path().join("notes.png");
-        std::fs::write(&text, "not a picture").unwrap();
+        crate::platform::sfs::write(&text, "not a picture").unwrap();
         assert!(import(&text, &dirs.state).is_err());
         assert!(copy.exists());
 
         remove(&dirs.state);
         assert!(!copy.exists());
         assert!(
-            std::fs::read_dir(&dirs.state).unwrap().next().is_none(),
+            crate::platform::sfs::read_dir(&dirs.state)
+                .unwrap()
+                .next()
+                .is_none(),
             "nothing is left behind"
         );
         remove(&dirs.state);
@@ -522,13 +525,13 @@ mod tests {
     fn a_missing_or_damaged_image_falls_back_to_the_colour() {
         let root = tempfile::tempdir().unwrap();
         let damaged = root.path().join("wallpaper.png");
-        std::fs::write(&damaged, "damaged").unwrap();
+        crate::platform::sfs::write(&damaged, "damaged").unwrap();
         let waker = crate::backend::Waker::default();
         for path in [damaged, root.path().join("missing.jpg")] {
             let mut custom = CustomImage::default();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(10);
             custom.sync(Some(&path), &waker);
-            while custom.pending.is_some() && std::time::Instant::now() < deadline {
+            while custom.pending.is_some() && crate::platform::Instant::now() < deadline {
                 std::thread::yield_now();
                 custom.sync(Some(&path), &waker);
             }
@@ -544,9 +547,9 @@ mod tests {
         write_image(&path, 20, 10);
         let waker = crate::backend::Waker::default();
         let mut custom = CustomImage::default();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(10);
         custom.sync(Some(&path), &waker);
-        while custom.ready().is_none() && std::time::Instant::now() < deadline {
+        while custom.ready().is_none() && crate::platform::Instant::now() < deadline {
             std::thread::yield_now();
             custom.sync(Some(&path), &waker);
         }

@@ -135,10 +135,11 @@ pub fn avatar(id: &str) -> Option<&'static [u8]> {
 /// Saves `bytes` as `name` in `dir` unless it is there already.
 pub fn save(dir: &Path, name: &str, bytes: &[u8]) -> PathBuf {
     let path = dir.join(name);
-    let current = std::fs::metadata(&path).is_ok_and(|file| file.len() == bytes.len() as u64);
+    let current =
+        crate::platform::sfs::metadata(&path).is_ok_and(|file| file.len() == bytes.len() as u64);
     if !current {
-        let _ = std::fs::create_dir_all(dir);
-        let _ = std::fs::write(&path, bytes);
+        let _ = crate::platform::sfs::create_dir_all(dir);
+        let _ = crate::platform::sfs::write(&path, bytes);
     }
     path
 }
@@ -240,6 +241,6 @@ mod tests {
                 frame.size
             );
         }
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = crate::platform::sfs::remove_dir_all(&dir);
     }
 }

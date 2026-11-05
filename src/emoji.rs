@@ -23,7 +23,7 @@ fn setup() {
     ONCE.call_once(|| {
         fastframe_emoji::EmojiSetup::default()
             .bundled(BUNDLED)
-            .synchronous(cfg!(any(test, feature = "demo")))
+            .synchronous(cfg!(any(test, feature = "demo", target_arch = "wasm32")))
             .install();
     });
 }

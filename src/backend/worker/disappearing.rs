@@ -79,7 +79,7 @@ impl Worker {
         let session = self.account_session;
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             if is_group {
                 let result = client
                     .groups()

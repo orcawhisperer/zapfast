@@ -12,9 +12,10 @@
 //! The tones follow the phase: the ringback while the peer's phone rings (the
 //! protocol's `<preaccept>`), the ringtone while a call to us waits.
 
+use crate::platform::Instant;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::{App, CALL_FAREWELL, notification_sound};
 use crate::backend::{Backend, Command};

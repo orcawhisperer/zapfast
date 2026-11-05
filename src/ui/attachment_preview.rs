@@ -403,7 +403,11 @@ fn file_size(ctx: &egui::Context, path: &std::path::Path) -> Option<u64> {
     let _ = std::thread::Builder::new()
         .name("attachment-info".into())
         .spawn(move || {
-            let _ = size.set(std::fs::metadata(path).ok().map(|info| info.len()));
+            let _ = size.set(
+                crate::platform::sfs::metadata(path)
+                    .ok()
+                    .map(|info| info.len()),
+            );
             ctx.request_repaint();
         });
     None

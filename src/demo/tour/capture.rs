@@ -45,7 +45,7 @@ pub(super) struct Frames {
 
 impl Frames {
     pub(super) fn new(capture: Capture) -> Result<Self> {
-        std::fs::create_dir_all(&capture.dir)
+        crate::platform::sfs::create_dir_all(&capture.dir)
             .with_context(|| format!("creating {}", capture.dir.display()))?;
         let (queue, jobs) = mpsc::sync_channel::<Job>(WRITERS * 3);
         let jobs = Arc::new(Mutex::new(jobs));
@@ -189,7 +189,8 @@ fn save(path: &std::path::Path, image: &ColorImage) -> Result<()> {
         })
         .collect();
     let file = std::io::BufWriter::new(
-        std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?,
+        crate::platform::sfs::File::create(path)
+            .with_context(|| format!("creating {}", path.display()))?,
     );
     PngEncoder::new_with_quality(file, CompressionType::Fast, FilterType::Sub)
         .write_image(

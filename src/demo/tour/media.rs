@@ -1,6 +1,7 @@
 //! Animated GIF-search thumbnails and stickers from the stock demo media, and
 //! emoji pictures from the bundled emoji font.
 
+use crate::platform::FilePath as _;
 use anyhow::{Context, Result};
 use image::RgbaImage;
 use skrifa::{FontRef, MetadataProvider, bitmap::BitmapData, instance::Size};
@@ -45,7 +46,7 @@ pub fn animate_gifs(app: &mut App) {
     let dir = dir(app);
     for (index, gif) in app.gif_results.iter_mut().enumerate() {
         let path = dir.join(format!("reaction-{index}.gif"));
-        let made = path.is_file()
+        let made = path.found_file()
             || gif
                 .still
                 .as_deref()
@@ -62,7 +63,7 @@ fn push_in(still: &std::path::Path, path: &std::path::Path) -> Result<()> {
     const FRAMES: u32 = 16;
     let picture = image::open(still)?.to_rgba8();
     let (width, height) = picture.dimensions();
-    let mut encoder = GifEncoder::new_with_speed(std::fs::File::create(path)?, 30);
+    let mut encoder = GifEncoder::new_with_speed(crate::platform::sfs::File::create(path)?, 30);
     encoder.set_repeat(Repeat::Infinite)?;
     for step in 0..FRAMES {
         // Up to an eighth closer at the middle of the loop.
@@ -92,7 +93,7 @@ fn push_in(still: &std::path::Path, path: &std::path::Path) -> Result<()> {
 
 pub fn populate(app: &mut App) -> Result<()> {
     let dir = dir(app);
-    std::fs::create_dir_all(&dir)?;
+    crate::platform::sfs::create_dir_all(&dir)?;
     let animated = stock::save(&dir, "reaction-animated.webp", stock::ANIMATED_STICKER);
     let gifs = stock::GIFS
         .into_iter()

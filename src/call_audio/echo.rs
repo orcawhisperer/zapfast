@@ -626,7 +626,7 @@ mod tests {
             canceller.process(&mut chunk);
         }
         drop(canceller);
-        let reference = std::fs::read_dir(folder.path())
+        let reference = crate::platform::sfs::read_dir(folder.path())
             .expect("listed")
             .map(|entry| entry.expect("an entry").path())
             .find(|path| path.to_string_lossy().ends_with("reference.wav"))
@@ -641,7 +641,7 @@ mod tests {
             mic[..CHUNK],
             "the microphone as it came in"
         );
-        let order = std::fs::read_to_string(order).expect("the order");
+        let order = crate::platform::sfs::read_to_string(order).expect("the order");
         let mut replay = Chain::new(&ChainSettings::call());
         let mut fed = 0;
         let mut replayed = Vec::new();
@@ -697,7 +697,7 @@ mod tests {
             super::super::dump::siblings(std::path::Path::new(&path)).expect("a dump's files");
         let read = |path| super::super::dump::read_wav(path).expect("a WAV file").1;
         let (reference, microphone) = (read(&reference), read(&microphone));
-        let order: Vec<(usize, i32)> = std::fs::read_to_string(order)
+        let order: Vec<(usize, i32)> = crate::platform::sfs::read_to_string(order)
             .expect("the order")
             .lines()
             .skip(1)

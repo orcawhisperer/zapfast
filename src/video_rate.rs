@@ -18,9 +18,10 @@
 //! [`RateControl`] is plain state driven by the peer's reports, so it can be tested without a call;
 //! [`RateShare`] is what it publishes for the capture thread, which reads it between frames.
 
+use crate::platform::Instant;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// One step of picture size and frame rate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -625,9 +626,9 @@ fn scale(bitrate: u32, factor: f64) -> u32 {
 }
 
 /// The middle 32 bits of the NTP timestamp for `now`, the form RTCP's LSR field takes.
-pub fn ntp_middle(now: std::time::SystemTime) -> u32 {
+pub fn ntp_middle(now: crate::platform::SystemTime) -> u32 {
     let since = now
-        .duration_since(std::time::UNIX_EPOCH)
+        .duration_since(crate::platform::UNIX_EPOCH)
         .unwrap_or_default();
     let seconds = since.as_secs().wrapping_add(NTP_UNIX_OFFSET);
     let fraction = (u64::from(since.subsec_nanos()) << 32) / 1_000_000_000;
@@ -1000,8 +1001,8 @@ mod tests {
 
     #[test]
     fn the_ntp_middle_bits_count_from_1900() {
-        assert_eq!(ntp_middle(std::time::UNIX_EPOCH), 0x7e80_0000);
-        let half = std::time::UNIX_EPOCH + Duration::from_millis(1_500);
+        assert_eq!(ntp_middle(crate::platform::UNIX_EPOCH), 0x7e80_0000);
+        let half = crate::platform::UNIX_EPOCH + Duration::from_millis(1_500);
         assert_eq!(ntp_middle(half), 0x7e81_8000);
     }
 

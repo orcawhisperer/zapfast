@@ -30,7 +30,7 @@ impl Worker {
         self.stars_recovering = true;
         log::info!("reading starred messages from the phone");
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             use whatsapp_rust::WAPatchName;
             let complete = match client
                 .resync_app_state(

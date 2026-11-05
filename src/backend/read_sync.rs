@@ -3,7 +3,8 @@
 //! Both a read and an unread mark are `markChatAsRead` actions, so they share
 //! one queue and one backoff.
 
-use std::time::{Duration, Instant};
+use crate::platform::Instant;
+use std::time::Duration;
 
 use crate::model::ChatId;
 

@@ -2,12 +2,13 @@
 //!
 //! Input and output devices are opened on demand and released when idle.
 
+use crate::platform::Instant;
 use std::collections::HashMap;
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use rodio::Source;
 use rodio::buffer::SamplesBuffer;
@@ -612,15 +613,15 @@ fn clip_length(samples: usize) -> Duration {
 /// Decodes a file to mono 48 kHz samples. OGG/Opus uses `voice`; other
 /// supported formats use rodio.
 fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
-    let bytes =
-        std::fs::read(path).map_err(|error| format!("Could not read the audio: {error}"))?;
+    let bytes = crate::platform::sfs::read(path)
+        .map_err(|error| format!("Could not read the audio: {error}"))?;
     if bytes.starts_with(b"OggS")
         && let Ok(samples) = voice::decode(&bytes)
     {
         return Ok(samples);
     }
-    let file =
-        std::fs::File::open(path).map_err(|error| format!("Could not read the audio: {error}"))?;
+    let file = crate::platform::sfs::File::open(path)
+        .map_err(|error| format!("Could not read the audio: {error}"))?;
     let decoder = rodio::Decoder::new(std::io::BufReader::new(file))
         .map_err(|error| format!("Could not decode the audio: {error}"))?;
     let channels = decoder.channels().get();
@@ -1038,8 +1039,8 @@ mod tests {
         let before = recorder.levels().len();
         // Busy machines oversleep, so wait for progress instead of a fixed time.
         let waited = |done: &dyn Fn() -> bool| {
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
-            while !done() && std::time::Instant::now() < deadline {
+            let deadline = crate::platform::Instant::now() + Duration::from_secs(10);
+            while !done() && crate::platform::Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(10));
             }
             done()
@@ -1498,7 +1499,8 @@ mod tests {
         let tone: Vec<f32> = (0..voice::RATE)
             .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
             .collect();
-        std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
+        crate::platform::sfs::write(&path, voice::encode(&tone).expect("encodes"))
+            .expect("written");
         let mut player = Player::new(Waker::default());
         player.toggle("clip", &path).expect("starts decoding");
         assert_eq!(player.status("clip").state, State::Loading);
@@ -1519,7 +1521,7 @@ mod tests {
         assert!(seen_playing, "never heard it playing");
         assert_eq!(player.status("clip").state, State::Idle, "ends on its own");
         assert_eq!(player.bars("clip").map(<[u8]>::len), Some(voice::BARS));
-        let _ = std::fs::remove_file(path);
+        let _ = crate::platform::sfs::remove_file(path);
     }
 
     /// Plays a two-second tone at double speed and checks the position
@@ -1533,7 +1535,8 @@ mod tests {
         let tone: Vec<f32> = (0..voice::RATE * 2)
             .map(|i| (i as f32 * 330.0 * std::f32::consts::TAU / voice::RATE as f32).sin() * 0.3)
             .collect();
-        std::fs::write(&path, voice::encode(&tone).expect("encodes")).expect("written");
+        crate::platform::sfs::write(&path, voice::encode(&tone).expect("encodes"))
+            .expect("written");
         let mut player = Player::new(Waker::default());
         player.set_speed(2.0);
         player.toggle("clip", &path).expect("starts decoding");
@@ -1561,7 +1564,7 @@ mod tests {
             advanced.as_secs_f32() >= 1.5 * wall.as_secs_f32(),
             "position advanced {advanced:?} over {wall:?} of wall time"
         );
-        let _ = std::fs::remove_file(path);
+        let _ = crate::platform::sfs::remove_file(path);
     }
 
     /// Records one second from the default microphone:

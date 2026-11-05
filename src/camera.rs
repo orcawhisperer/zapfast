@@ -35,7 +35,7 @@ pub enum Read {
     /// A whole frame landed in the buffer, taken from the camera at this instant: when the driver
     /// handed it over, before any conversion, so the time a frame carries does not depend on how
     /// long its conversion took.
-    Frame(std::time::Instant),
+    Frame(crate::platform::Instant),
     /// The camera delivered something that is not a picture; read again.
     Idle,
     /// The camera is gone: unplugged, taken by another program, or refused.
@@ -116,7 +116,7 @@ impl Source {
     pub fn read(&mut self, out: &mut [u8], size: (usize, usize)) -> Read {
         let mut taken = None;
         let converted = self.camera.read(|pixel, data, width, height, stride| {
-            taken = Some(std::time::Instant::now());
+            taken = Some(crate::platform::Instant::now());
             let picture = match pixel {
                 Pixel::I420 => planar_to_i420(data, width, height, stride),
                 _ => to_i420(pixel, data, width, height),
@@ -128,7 +128,7 @@ impl Source {
             true
         });
         match converted {
-            Ok(true) => Read::Frame(taken.unwrap_or_else(std::time::Instant::now)),
+            Ok(true) => Read::Frame(taken.unwrap_or_else(crate::platform::Instant::now)),
             Ok(false) => Read::Idle,
             Err(error) => {
                 log::warn!("[CALL] the camera stopped delivering: {error}");
@@ -143,9 +143,9 @@ impl Source {
         let mut taken = None;
         match self
             .camera
-            .read(|_, _, _, _, _| taken = Some(std::time::Instant::now()))
+            .read(|_, _, _, _, _| taken = Some(crate::platform::Instant::now()))
         {
-            Ok(()) => Read::Frame(taken.unwrap_or_else(std::time::Instant::now)),
+            Ok(()) => Read::Frame(taken.unwrap_or_else(crate::platform::Instant::now)),
             Err(error) => {
                 log::warn!("[CALL] the camera stopped delivering: {error}");
                 Read::Ended
@@ -646,8 +646,39 @@ mod backend {
     }
 }
 
+/// No camera through this path in a page: a call there uses getUserMedia.
+#[cfg(target_arch = "wasm32")]
+mod backend {
+    use super::{Mode, Pixel};
+
+    pub fn list() -> Vec<(String, String)> {
+        Vec::new()
+    }
+
+    pub struct Camera(Mode);
+
+    impl Camera {
+        pub fn open(_id: &str, _budget: (usize, usize), _fps: u32) -> Result<Self, String> {
+            Err("no camera here".to_owned())
+        }
+
+        pub fn mode(&self) -> Mode {
+            self.0
+        }
+
+        pub fn read<R>(
+            &mut self,
+            _convert: impl FnOnce(Pixel, &[u8], usize, usize, usize) -> R,
+        ) -> Result<R, String> {
+            Err("no camera here".to_owned())
+        }
+
+        pub fn stop(&mut self) {}
+    }
+}
+
 /// AVFoundation on macOS and Media Foundation on Windows, through nokhwa.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_arch = "wasm32")))]
 mod backend {
     use super::{Mode, Pixel};
     use nokhwa::utils::{

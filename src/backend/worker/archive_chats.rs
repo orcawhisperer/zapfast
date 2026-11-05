@@ -47,7 +47,7 @@ impl Worker {
         let at = jiff::Timestamp::now().as_millisecond();
         let range = Some(archive_range(&jid, last.as_ref()));
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = if archived {
                 client.chat_actions().archive_chat(&jid, range).await
             } else {

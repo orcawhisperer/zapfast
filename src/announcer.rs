@@ -1,7 +1,8 @@
 //! Spoken announcements for screen readers: two hidden live-region nodes
 //! take turns, so a repeated message is still a change worth reading.
 
-use std::time::{Duration, Instant};
+use crate::platform::Instant;
+use std::time::Duration;
 
 use egui::accesskit::{Live, Role};
 

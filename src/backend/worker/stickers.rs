@@ -81,7 +81,7 @@ async fn prepare_sticker_pack(
     };
     let mut stickers = Vec::new();
     for path in files.into_iter().take(PACK_LIMIT) {
-        let bytes = tokio::fs::read(&path)
+        let bytes = crate::platform::fs::read(&path)
             .await
             .map_err(|error| error.to_string())?;
         let emojis = crate::sticker_meta::emojis(&bytes);
@@ -93,7 +93,7 @@ async fn prepare_sticker_pack(
         .0
         .clone();
     let (cover, thumbnail) =
-        tokio::task::spawn_blocking(move || super::super::sticker_import::pack_art(&first))
+        crate::platform::spawn_blocking(move || super::super::sticker_import::pack_art(&first))
             .await
             .map_err(|error| error.to_string())?
             .ok_or("Could not draw the pack's cover")?;
@@ -260,7 +260,7 @@ async fn push_favorite(client: &Client, push: FavoritePush) -> Result<Vec<u8>, S
     let filehash = filehash_of_hash(&push.hash).ok_or("not a sticker hash")?;
     let mut action = push.action.unwrap_or_default();
     if push.favorite && action.direct_path.is_none() {
-        let bytes = tokio::fs::read(&push.file)
+        let bytes = crate::platform::fs::read(&push.file)
             .await
             .map_err(|error| error.to_string())?;
         let size = image::ImageReader::new(std::io::Cursor::new(&bytes))
@@ -330,7 +330,7 @@ impl Worker {
         if let Ok(phone) = self.archive.phone_stickers() {
             for sticker in phone {
                 if let Some(path) = sticker.path
-                    && path.exists()
+                    && path.found()
                     && !hidden(&sticker.hash, sticker.last_used)
                     && seen.insert(sticker.hash.clone())
                 {
@@ -404,14 +404,14 @@ impl Worker {
     fn sticker_emojis(&mut self, paths: &[PathBuf]) -> HashMap<PathBuf, Vec<String>> {
         let mut found = HashMap::new();
         for path in paths {
-            let Ok(metadata) = std::fs::metadata(path) else {
+            let Ok(metadata) = crate::platform::sfs::metadata(path) else {
                 continue;
             };
             let stamp = (metadata.len(), metadata.modified().ok());
             let emojis = match self.emoji_cache.get(path) {
                 Some((seen, emojis)) if *seen == stamp => emojis.clone(),
                 _ => {
-                    let emojis = std::fs::read(path)
+                    let emojis = crate::platform::sfs::read(path)
                         .map(|bytes| crate::sticker_meta::emojis(&bytes))
                         .unwrap_or_default();
                     self.emoji_cache
@@ -439,7 +439,7 @@ impl Worker {
         let (Some(client), Some(filehash)) = (self.client.clone(), filehash_of_hash(&hash)) else {
             return;
         };
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let value = {
                 let mut proto = wa::SyncActionValue::default();
                 proto.remove_recent_sticker_action = MessageField::some({
@@ -477,10 +477,10 @@ impl Worker {
         if !path.starts_with(self.dirs.saved_sticker_dir()) {
             return;
         }
-        let hash = std::fs::read(path)
+        let hash = crate::platform::sfs::read(path)
             .ok()
             .map(|bytes| super::super::sticker_store::content_hash(&bytes));
-        if std::fs::remove_file(path).is_err() {
+        if crate::platform::sfs::remove_file(path).is_err() {
             return;
         }
         match hash {
@@ -524,7 +524,7 @@ impl Worker {
             if filehash_of_hash(&hash).is_some()
                 && matches!(self.archive.favorite_sticker(&hash), Ok(None))
             {
-                let when = std::fs::metadata(&path)
+                let when = crate::platform::sfs::metadata(&path)
                     .and_then(|metadata| metadata.modified())
                     .ok()
                     .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
@@ -564,7 +564,7 @@ impl Worker {
             .collect();
         self.favorites_pushing = true;
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             for push in pushes {
                 let (hash, updated_at) = (push.hash.clone(), push.updated_at);
                 let result = push_favorite(&client, push).await;
@@ -674,7 +674,7 @@ impl Worker {
         );
         if !favorite {
             let path = self.dirs.saved_sticker_dir().join(format!("{hash}.webp"));
-            if std::fs::remove_file(&path).is_ok() {
+            if crate::platform::sfs::remove_file(&path).is_ok() {
                 self.emit_stickers();
             }
             return;
@@ -682,7 +682,7 @@ impl Worker {
         // Through the queue: a snapshot of the phone's favorites replays
         // every one of them here at once.
         let saved = self.dirs.saved_sticker_dir().join(format!("{hash}.webp"));
-        if !saved.exists() && !self.copy_local_favorite(&hash) {
+        if !saved.found() && !self.copy_local_favorite(&hash) {
             self.sticker_pace.push(hash);
             self.pump_favorite_stickers();
         }
@@ -693,7 +693,7 @@ impl Worker {
     fn fetch_favorite(&mut self, hash: String) {
         let dir = self.dirs.saved_sticker_dir();
         let path = dir.join(format!("{hash}.webp"));
-        if path.exists() || self.favorite_fetches.contains(&hash) || self.copy_local_favorite(&hash)
+        if path.found() || self.favorite_fetches.contains(&hash) || self.copy_local_favorite(&hash)
         {
             return;
         }
@@ -728,7 +728,7 @@ impl Worker {
         };
         self.favorite_fetches.insert(hash.clone());
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let mut result = Err("no download references".to_owned());
             for download in &candidates {
                 result =
@@ -792,7 +792,7 @@ impl Worker {
                 }),
         );
         candidates.into_iter().find(|path| {
-            std::fs::read(path)
+            crate::platform::sfs::read(path)
                 .is_ok_and(|bytes| super::super::sticker_store::content_hash(&bytes) == hash)
         })
     }
@@ -804,7 +804,7 @@ impl Worker {
         let missing: Vec<String> = match self.archive.favorite_stickers_from_phone() {
             Ok(hashes) => hashes
                 .into_iter()
-                .filter(|hash| !dir.join(format!("{hash}.webp")).exists())
+                .filter(|hash| !dir.join(format!("{hash}.webp")).found())
                 .collect(),
             Err(error) => {
                 log::warn!("could not list favorite stickers to fetch: {error}");
@@ -863,13 +863,13 @@ impl Worker {
         self.favorite_fetches.remove(hash);
         match result {
             Ok(path) => {
-                let matches = std::fs::read(&path)
+                let matches = crate::platform::sfs::read(&path)
                     .is_ok_and(|bytes| super::super::sticker_store::content_hash(&bytes) == hash);
                 if matches {
                     log::info!("favorite sticker fetched from the phone");
                 } else {
                     log::warn!("a favorite sticker did not match its hash");
-                    let _ = std::fs::remove_file(&path);
+                    let _ = crate::platform::sfs::remove_file(&path);
                 }
                 self.emit_stickers();
             }
@@ -913,7 +913,7 @@ impl Worker {
         self.favorites_recovering = true;
         log::info!("reading favorite stickers and chat settings from the phone");
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             use whatsapp_rust::WAPatchName;
             let complete = match client
                 .resync_app_state(
@@ -1010,7 +1010,7 @@ impl Worker {
             return;
         }
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let result = async {
                 let zip = client
                     .download(&pack, Default::default())
@@ -1026,7 +1026,7 @@ impl Worker {
                 let tray = pack.tray_icon_file_name.clone();
                 let target = dir.clone();
                 let label = name.clone();
-                let stickers = tokio::task::spawn_blocking(move || {
+                let stickers = crate::platform::spawn_blocking(move || {
                     super::super::sticker_import::extract_whatsapp_pack(
                         &zip,
                         &stickers,
@@ -1084,7 +1084,7 @@ impl Worker {
         let commands = self.commands.clone();
         let media = self.dirs.media_cache_dir();
         let me = self.me();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let outcome = async {
                 let prepared =
                     prepare_sticker_pack(&client, pack.name, publisher, pack.stickers).await?;
@@ -1595,7 +1595,7 @@ mod tests {
         };
         listed(&events);
         let file = root.path().join("s1.webp");
-        std::fs::write(&file, b"webp").unwrap();
+        crate::platform::sfs::write(&file, b"webp").unwrap();
         worker
             .handle_command(Command::Downloaded {
                 card: None,
@@ -1622,7 +1622,7 @@ mod tests {
         let mut arrivals = 0;
         while let Some((chat, id)) = worker.sticker_downloads.iter().next().cloned() {
             let file = root.path().join(format!("{id}.webp"));
-            std::fs::write(&file, b"webp").unwrap();
+            crate::platform::sfs::write(&file, b"webp").unwrap();
             events.try_iter().for_each(drop);
             worker
                 .handle_command(Command::Downloaded {
@@ -1670,7 +1670,7 @@ mod tests {
         use crate::model::{Content, Media, MediaState};
         use sha2::{Digest, Sha256};
         let path = root.join(format!("{id}.webp"));
-        std::fs::write(&path, bytes).expect("writes");
+        crate::platform::sfs::write(&path, bytes).expect("writes");
         let mut message = crate::archive::tests::message(chat, id, at, false);
         message.content = Content::Sticker {
             media: Media {
@@ -1762,9 +1762,9 @@ mod tests {
         let bytes = sticker_bytes("from the phone's tray");
         let hash = crate::backend::sticker_store::content_hash(&bytes);
         let cache = worker.dirs.sticker_cache_dir();
-        std::fs::create_dir_all(&cache).expect("cache");
+        crate::platform::sfs::create_dir_all(&cache).expect("cache");
         let cached = cache.join("recent.webp");
-        std::fs::write(&cached, &bytes).expect("writes");
+        crate::platform::sfs::write(&cached, &bytes).expect("writes");
         worker
             .archive
             .upsert_phone_sticker(&hash, b"meta", 100, 1.0)
@@ -1778,7 +1778,7 @@ mod tests {
 
         let saved = worker.dirs.saved_sticker_dir().join(format!("{hash}.webp"));
         assert_eq!(
-            std::fs::read(&saved).ok(),
+            crate::platform::sfs::read(&saved).ok(),
             Some(bytes),
             "saved as a favorite"
         );
@@ -1819,11 +1819,11 @@ mod tests {
 
         // By the next connection the sticker arrived in a pack.
         let pack = worker.packs_dir().join("Ducks");
-        std::fs::create_dir_all(&pack).expect("pack");
-        std::fs::write(pack.join(format!("{hash}.webp")), &bytes).expect("writes");
+        crate::platform::sfs::create_dir_all(&pack).expect("pack");
+        crate::platform::sfs::write(pack.join(format!("{hash}.webp")), &bytes).expect("writes");
         worker.fetch_missing_favorites();
         let saved = worker.dirs.saved_sticker_dir().join(format!("{hash}.webp"));
-        assert_eq!(std::fs::read(saved).ok(), Some(bytes));
+        assert_eq!(crate::platform::sfs::read(saved).ok(), Some(bytes));
     }
 
     /// Favorites with no copy here wait their turn instead of all going to
@@ -1863,7 +1863,7 @@ mod tests {
             let (mut worker, root, _events, _commands) = sticker_worker();
             let bytes = sticker_bytes("favorited here first");
             let file = root.path().join("picked.webp");
-            std::fs::write(&file, &bytes).expect("writes");
+            crate::platform::sfs::write(&file, &bytes).expect("writes");
             worker.favorite_sticker(&file);
             let hash = crate::backend::sticker_store::content_hash(&bytes);
             let saved = worker.dirs.saved_sticker_dir().join(format!("{hash}.webp"));
@@ -1901,7 +1901,7 @@ mod tests {
         let (mut worker, root, _events, _commands) = sticker_worker();
         let bytes = sticker_bytes("favorited here while offline");
         let file = root.path().join("picked.webp");
-        std::fs::write(&file, &bytes).expect("writes");
+        crate::platform::sfs::write(&file, &bytes).expect("writes");
         worker.favorite_sticker(&file);
         let hash = crate::backend::sticker_store::content_hash(&bytes);
         worker.favorite_sticker_update(&phone_favorite(&bytes, false, now_millis() - 60_000));

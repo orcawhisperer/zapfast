@@ -22,7 +22,7 @@ const MAX_OUTPUT_SIDE: f32 = 320.0;
 /// Read just the animation JSON. Ignore metadata and trust tokens, and never
 /// extract archive members onto disk. Size caps also bound ZIP decompression.
 fn animation_json(path: &Path) -> Option<String> {
-    let file = std::fs::File::open(path).ok()?;
+    let file = crate::platform::sfs::File::open(path).ok()?;
     if file.metadata().ok()?.len() > MAX_ARCHIVE_BYTES {
         return None;
     }
@@ -111,7 +111,7 @@ mod tests {
     const JSON: &str = r#"{"v":"5.7.6","fr":30,"ip":0,"op":30,"w":64,"h":64,"layers":[]}"#;
 
     fn archive(path: &Path, json: &str) {
-        let file = std::fs::File::create(path).expect("archive file");
+        let file = crate::platform::sfs::File::create(path).expect("archive file");
         let mut zip = zip::ZipWriter::new(file);
         zip.start_file("animation.json", zip::write::SimpleFileOptions::default())
             .expect("entry");
@@ -144,7 +144,8 @@ mod tests {
         assert!(decode(&path, 1).is_none());
         archive(&path, &JSON.replace("\"w\":64", "\"w\":5000"));
         assert!(decode(&path, 1).is_none());
-        std::fs::write(&path, vec![0u8; MAX_ARCHIVE_BYTES as usize + 1]).expect("oversized");
+        crate::platform::sfs::write(&path, vec![0u8; MAX_ARCHIVE_BYTES as usize + 1])
+            .expect("oversized");
         assert!(decode(&path, 1).is_none());
     }
 }

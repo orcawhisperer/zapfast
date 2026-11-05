@@ -5,11 +5,13 @@
 //! hands it to a helper that installs it and rolls back if it does not start.
 //! ZapFast keeps its names, its key, its proxy and its interface.
 
+#[cfg(not(target_arch = "wasm32"))]
+use fastframe_update::ReqwestTransport;
 pub use fastframe_update::{
     CHECK_INTERVAL, DownloadState, Installation, Kind, Prepared, Release, Source, Unsupported,
     Updater,
 };
-use fastframe_update::{MacConfig, ReqwestTransport, UpdateConfig};
+use fastframe_update::{MacConfig, UpdateConfig};
 
 /// ZapFast's releases and the names its installations have had.
 pub const CONFIG: UpdateConfig = UpdateConfig {
@@ -35,6 +37,13 @@ pub const CONFIG: UpdateConfig = UpdateConfig {
 };
 
 /// An updater on the proxy-aware reqwest client.
+#[cfg(target_arch = "wasm32")]
+pub fn updater() -> anyhow::Result<Updater> {
+    anyhow::bail!("a page is updated by reloading it")
+}
+
+/// An updater on the proxy-aware reqwest client.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn updater() -> anyhow::Result<Updater> {
     let mut builder = reqwest::blocking::Client::builder();
     if let Some(proxy) = crate::proxy::reqwest_proxy() {

@@ -21,8 +21,8 @@ impl Worker {
         let dir = self.dirs.media_cache_dir();
         let events = self.events.clone();
         let waker = self.waker.clone();
-        tokio::task::spawn_blocking(move || {
-            let Some(path) = rfd::FileDialog::new()
+        crate::platform::spawn_blocking(move || {
+            let Some(path) = crate::platform::FileDialog::new()
                 .set_title("Choose a group photo")
                 .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
                 .pick_file()
@@ -82,7 +82,7 @@ impl Worker {
         let lids = self.lid_to_pn.clone();
         let commands = self.commands.clone();
         let waker = self.waker.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let options = GroupCreateOptions::new(subject.clone())
                 .with_participants(jids.into_iter().map(GroupParticipantOptions::new).collect());
             let result = match client.groups().create_group(options).await {
@@ -180,7 +180,7 @@ impl Worker {
         let _ = self.archive.touch_activity(&chat, group.created_at);
         self.emit_chat(&chat);
         if let Some(path) = picture {
-            match std::fs::read(&path) {
+            match crate::platform::sfs::read(&path) {
                 Ok(jpeg) => self.set_group_picture(chat.clone(), Some(jpeg)),
                 Err(_) => log::warn!("could not read a new group's photo"),
             }
@@ -285,9 +285,9 @@ fn stage_picture(dir: &Path, jpeg: &[u8]) -> Result<PathBuf, String> {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     jpeg.hash(&mut hasher);
-    std::fs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| error.to_string())?;
     let path = dir.join(format!("new-group-{:016x}.jpg", hasher.finish()));
-    std::fs::write(&path, jpeg).map_err(|error| error.to_string())?;
+    crate::platform::sfs::write(&path, jpeg).map_err(|error| error.to_string())?;
     Ok(path)
 }
 
@@ -484,6 +484,6 @@ mod tests {
         let second = stage_picture(dir.path(), b"two").unwrap();
         assert_eq!(first, again);
         assert_ne!(first, second);
-        assert_eq!(std::fs::read(second).unwrap(), b"two");
+        assert_eq!(crate::platform::sfs::read(second).unwrap(), b"two");
     }
 }

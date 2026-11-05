@@ -5,9 +5,10 @@
 //! working (`maintain`) as it reads. Open and read on that one thread, never the UI thread:
 //! opening the default input on PipeWire can wait for its server.
 
+use crate::platform::Instant;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fastframe_audio::{Capture, Device, Input, InputOptions, Maintained};
 

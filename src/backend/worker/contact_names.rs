@@ -28,7 +28,7 @@ impl Worker {
         self.first_names_recovering = true;
         log::info!("reading contact first names from the phone");
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             use whatsapp_rust::WAPatchName;
             let complete = match client
                 .resync_app_state(

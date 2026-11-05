@@ -4,10 +4,11 @@
 //! active account through `App`'s `Deref`. Each account has its own backend
 //! thread, archive, and folders.
 
+use crate::platform::FilePath as _;
+use crate::platform::Instant;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Instant;
 
 use crate::app::{AttachmentDraft, ComposerMention, Conversation};
 use crate::backend::{Backend, LinkStatus, Waker};
@@ -276,7 +277,7 @@ impl Account {
         let dirs = app_dirs.account(&id);
         dirs.ensure()?;
         let path = dirs.settings_file();
-        let mut settings = if path.exists() {
+        let mut settings = if path.found() {
             AccountSettings::load(&path)
         } else if id.as_str() == "1" {
             // Only `App::new` spawns account 1 (an added account is numbered
@@ -379,13 +380,13 @@ fn resolve_wallpaper_path(dirs: &AccountDirs, settings: &mut AccountSettings) {
     if settings
         .wallpaper_image
         .as_ref()
-        .is_some_and(|path| path.exists())
+        .is_some_and(|path| path.found())
     {
         return;
     }
     for extension in ["jpg", "png", "webp", "gif"] {
         let path = dirs.wallpaper_file(extension);
-        if path.exists() {
+        if path.found() {
             settings.wallpaper_image = Some(path);
             return;
         }
@@ -393,7 +394,7 @@ fn resolve_wallpaper_path(dirs: &AccountDirs, settings: &mut AccountSettings) {
     if settings
         .wallpaper_image
         .as_ref()
-        .is_some_and(|path| !path.exists())
+        .is_some_and(|path| !path.found())
     {
         settings.wallpaper_image = None;
     }

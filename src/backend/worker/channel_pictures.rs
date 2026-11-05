@@ -91,7 +91,7 @@ impl Worker {
         };
         let path = self.avatar_file(&id, full);
         let commands = self.commands.clone();
-        tokio::spawn(async move {
+        crate::platform::spawn(async move {
             let fetched = async {
                 let picture = match known {
                     Some(picture) => picture,
@@ -180,8 +180,8 @@ mod tests {
     async fn a_changed_channel_picture_drops_the_cached_copy() {
         let (mut worker, events, _, _) = super::super::receipt_tests::worker();
         let cached = worker.avatar_file(CHANNEL, false);
-        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
-        std::fs::write(&cached, b"fixture").unwrap();
+        crate::platform::sfs::create_dir_all(cached.parent().unwrap()).unwrap();
+        crate::platform::sfs::write(&cached, b"fixture").unwrap();
 
         worker.channel_pictures_listed(Some(vec![(CHANNEL.into(), picture("first"))]));
         worker.channel_pictures_listed(Some(vec![(CHANNEL.into(), picture("first"))]));

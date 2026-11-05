@@ -1,0 +1,10 @@
+[package]
+name = "web-shim-fastframe-shell"
+version = "0.15.4"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "The part of fastframe-shell the browser build needs. A page has no window to replace and no headless loop; the browser owns both."
+
+[dependencies]
+egui = "0.36.2"

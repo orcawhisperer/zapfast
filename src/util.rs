@@ -752,7 +752,11 @@ fn french_phone(digits: &str) -> Option<String> {
 
 /// The machine's hostname, or an empty string if it cannot be read.
 pub fn hostname() -> String {
-    gethostname::gethostname().to_string_lossy().into_owned()
+    #[cfg(not(target_arch = "wasm32"))]
+    return gethostname::gethostname().to_string_lossy().into_owned();
+    // A page cannot read it.
+    #[cfg(target_arch = "wasm32")]
+    String::new()
 }
 
 /// Stable id-derived avatar hue.
@@ -1123,13 +1127,13 @@ mod tests {
     fn image_loader_reads_native_paths() {
         use egui::load::BytesPoll;
         let dir = std::env::temp_dir().join(format!("zapfast-image-paths-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        crate::platform::sfs::create_dir_all(&dir).unwrap();
         let path = dir.join("猫 photo 100% #1.png");
-        std::fs::write(&path, b"image bytes").unwrap();
+        crate::platform::sfs::write(&path, b"image bytes").unwrap();
         let ctx = egui::Context::default();
         egui_extras::install_image_loaders(&ctx);
         let uri = super::image_uri(&path);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(5);
         loop {
             match ctx.try_load_bytes(&uri).unwrap() {
                 BytesPoll::Ready { bytes, .. } => {
@@ -1137,12 +1141,12 @@ mod tests {
                     break;
                 }
                 BytesPoll::Pending { .. } => {
-                    assert!(std::time::Instant::now() < deadline);
+                    assert!(crate::platform::Instant::now() < deadline);
                     std::thread::sleep(std::time::Duration::from_millis(5));
                 }
             }
         }
-        std::fs::remove_dir_all(dir).unwrap();
+        crate::platform::sfs::remove_dir_all(dir).unwrap();
     }
 
     use super::*;

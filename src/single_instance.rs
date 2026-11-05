@@ -8,11 +8,12 @@
 //! one. Copies from before the lock (0.15 and earlier) only know a fixed
 //! port, which this module still answers.
 
+use crate::platform::Instant;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Stable wire identity shared with FastsApp so upgrades surface a running
 /// older copy before migrating its session files. On the wire every request
@@ -424,8 +425,8 @@ mod tests {
         use std::io::BufRead;
         let home = tempfile::tempdir().unwrap();
         let dir = home.path().join("runtime");
-        std::fs::create_dir_all(&dir).unwrap();
-        let lock = std::fs::File::create(dir.join("instance.lock")).unwrap();
+        crate::platform::sfs::create_dir_all(&dir).unwrap();
+        let lock = crate::platform::sfs::File::create(dir.join("instance.lock")).unwrap();
         lock.try_lock().expect("the older copy's lock");
         let listener = std::os::unix::net::UnixListener::bind(dir.join("instance.sock")).unwrap();
         let seen = Seen::default();
@@ -510,7 +511,7 @@ mod tests {
         };
         #[cfg(not(unix))]
         let mut stream = {
-            let key = std::fs::read_to_string(dir.join("instance.key")).unwrap();
+            let key = crate::platform::sfs::read_to_string(dir.join("instance.key")).unwrap();
             let mut key = key.lines();
             let port: u16 = key.next().unwrap().parse().unwrap();
             let written = key.next().unwrap().to_owned();

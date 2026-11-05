@@ -62,11 +62,11 @@ fn attempts(path: &Path) -> Vec<Attempt<'_>> {
 #[cfg(not(all(unix, not(target_os = "macos"))))]
 fn attempts(path: &Path) -> Vec<Attempt<'_>> {
     let mut attempts: Vec<Attempt<'_>> = vec![Box::new(move || {
-        open::that(path).map_err(|error| error.to_string())
+        crate::platform::open::that(path).map_err(|error| error.to_string())
     })];
     if let Some(folder) = path.parent() {
         attempts.push(Box::new(move || {
-            open::that(folder).map_err(|error| error.to_string())
+            crate::platform::open::that(folder).map_err(|error| error.to_string())
         }));
     }
     attempts
@@ -91,7 +91,7 @@ pub struct DetachedLinks {
 impl Default for DetachedLinks {
     fn default() -> Self {
         Self {
-            open: |url| open::that_detached(url),
+            open: |url| crate::platform::open::that_detached(url),
         }
     }
 }
@@ -118,9 +118,10 @@ impl egui::plugin::Plugin for DetachedLinks {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod linux {
+    use crate::platform::Instant;
     use std::path::Path;
     use std::process::{Command, Stdio};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     /// How long a launcher gets to fail. One still running by then is taken
     /// to have started the program: some launchers run it in the foreground.
@@ -276,9 +277,10 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn a_launcher_is_judged_by_its_exit() {
+        use crate::platform::Instant;
         use linux::{LAUNCH_GRACE, launch};
         use std::process::Command;
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
         assert_eq!(launch(Command::new("sh").args(["-c", "exit 0"])), Ok(()));
         let failed = launch(Command::new("sh").args(["-c", "exit 4"])).unwrap_err();
         assert!(failed.starts_with("sh failed"), "{failed}");

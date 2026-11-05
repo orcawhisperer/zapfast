@@ -13,9 +13,9 @@
 //! units decode back to `egui` images with the `openh264` decoder `crate::video` already uses.
 //! Frames cross to the UI through [`VideoTick`]; no decode work happens on the UI thread.
 
+use crate::platform::Instant;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use egui::ColorImage;
@@ -490,7 +490,7 @@ async fn missing_audio_device_off_thread(
     microphone: Option<String>,
     speaker: Option<String>,
 ) -> Option<&'static str> {
-    tokio::task::spawn_blocking(move || {
+    crate::platform::spawn_blocking(move || {
         missing_audio_device(microphone.as_deref(), speaker.as_deref())
     })
     .await
@@ -720,7 +720,7 @@ impl VideoPipeline {
         call_id: &str,
     ) -> Result<(Self, async_channel::Receiver<VideoTick>)> {
         let diag = Arc::new(crate::call_diag::CallVideo::new(call_id));
-        tokio::task::spawn_blocking(move || Self::start_blocking(device, diag))
+        crate::platform::spawn_blocking(move || Self::start_blocking(device, diag))
             .await
             .map_err(|error| anyhow!("the camera thread failed: {error}"))?
     }
@@ -851,7 +851,7 @@ impl VideoPipeline {
         let diag = Arc::clone(&self.diag);
         // The old camera is released first, on the same blocking thread, so the new one never
         // races it for the device.
-        let camera = tokio::task::spawn_blocking(move || {
+        let camera = crate::platform::spawn_blocking(move || {
             drop(previous);
             CameraCapture::start(device, ticks, rate, diag)
         })
@@ -1072,6 +1072,12 @@ fn video_encoder(
 
 /// Moves a running encoder to `bitrate` without restarting it, so a rate change costs no keyframe.
 /// `false` if openh264 refused.
+#[cfg(target_arch = "wasm32")]
+fn set_encoder_bitrate(_encoder: &mut openh264::encoder::Encoder, _bitrate: u32) -> bool {
+    false
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn set_encoder_bitrate(encoder: &mut openh264::encoder::Encoder, bitrate: u32) -> bool {
     let mut info = openh264_sys2::SBitrateInfo {
         iLayer: openh264_sys2::SPATIAL_LAYER_ALL,
@@ -1311,7 +1317,7 @@ fn decode_remote(
             // the decoder has to handle, and the picture's size.
             let mut profile = None;
             let mut size = (0, 0);
-            while let Ok(frame) = frames.recv_blocking() {
+            while let Ok(frame) = crate::platform::recv_blocking(&frames) {
                 diag.received.write(&frame.data);
                 if let Some(seen) = crate::call_diag::stream_profile(&frame.data)
                     && profile != Some(seen)
@@ -1646,7 +1652,7 @@ pub struct Call {
     /// The roster of a group call; `None` for a one-to-one call.
     group: Option<GroupRoster>,
     /// The task joining a call link, until it has joined: hanging up stops it.
-    join_task: Option<tokio::task::AbortHandle>,
+    join_task: Option<crate::platform::AbortHandle>,
 }
 
 /// What a group call's own signaling says about who is on it.
@@ -2032,7 +2038,7 @@ impl Call {
             .as_ref()
             .map(|(pipeline, _)| (pipeline.source(), pipeline.sink()));
         let client = Arc::clone(client);
-        let task = tokio::spawn(async move {
+        let task = crate::platform::spawn(async move {
             let media = if video {
                 whatsapp_rust::types::group_call::CallLinkMedia::Video
             } else {
@@ -2133,7 +2139,7 @@ impl Call {
             .map(|jid| jid.to_non_ad())
             .collect();
         let client = Arc::clone(client);
-        let task = tokio::spawn(async move {
+        let task = crate::platform::spawn(async move {
             // Whether WhatsApp lets this account start group calls from a linked device. The
             // button is offered either way: the call service has the last word.
             let gate = client
@@ -2936,7 +2942,7 @@ impl Call {
                 }
                 // Every block answering one of our sender reports measures the same path, audio's
                 // as well as video's; the shortest is the one least held up on the way.
-                let now = crate::video_rate::ntp_middle(std::time::SystemTime::now());
+                let now = crate::video_rate::ntp_middle(crate::platform::SystemTime::now());
                 let round_trip = report_blocks
                     .iter()
                     .filter_map(|block| {
@@ -3641,14 +3647,14 @@ mod tests {
         call.set_microphone(Some("Second microphone".to_owned()));
 
         // The engine's microphone channel is the same one it was, and it is still carrying frames.
-        tokio::time::timeout(std::time::Duration::from_secs(5), frames.recv())
+        crate::platform::time::timeout(std::time::Duration::from_secs(5), frames.recv())
             .await
             .expect("the microphone channel survived the changes")
             .expect("the frames are still coming");
         // Only the rebind opened a device: the camera change never touches the audio at all.
-        let started = std::time::Instant::now();
+        let started = crate::platform::Instant::now();
         while speaker.opened_count() < 2 && started.elapsed() < std::time::Duration::from_secs(5) {
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            crate::platform::time::sleep(std::time::Duration::from_millis(20)).await;
         }
         assert_eq!(
             speaker.opened(),
@@ -3773,11 +3779,13 @@ mod tests {
         for step in 0..3 {
             let muted = step == 1;
             for _ in 0..4 {
-                let mut frame =
-                    tokio::time::timeout(std::time::Duration::from_secs(5), frames.recv())
-                        .await
-                        .expect("the engine's channel stays open")
-                        .expect("the microphone keeps delivering");
+                let mut frame = crate::platform::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    frames.recv(),
+                )
+                .await
+                .expect("the engine's channel stays open")
+                .expect("the microphone keeps delivering");
                 assert_eq!(
                     frame.len(),
                     crate::call_audio::FRAME_SAMPLES,
@@ -3828,12 +3836,12 @@ mod tests {
     /// rebind it asked for has had a chance to happen. Returns as soon as the answer is yes, and
     /// leaves the last answer for the caller to assert on.
     async fn until(mut ready: impl FnMut() -> bool) -> bool {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while std::time::Instant::now() < deadline {
+        let deadline = crate::platform::Instant::now() + std::time::Duration::from_secs(5);
+        while crate::platform::Instant::now() < deadline {
             if ready() {
                 return true;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            crate::platform::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         ready()
     }
@@ -3870,11 +3878,13 @@ mod tests {
         for step in 0..2 {
             let muted = step == 0;
             for _ in 0..3 {
-                let mut frame =
-                    tokio::time::timeout(std::time::Duration::from_secs(5), frames.recv())
-                        .await
-                        .expect("the engine's channel stays open through the mute")
-                        .expect("the microphone keeps delivering");
+                let mut frame = crate::platform::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    frames.recv(),
+                )
+                .await
+                .expect("the engine's channel stays open through the mute")
+                .expect("the microphone keeps delivering");
                 assert_eq!(frame.len(), crate::call_audio::FRAME_SAMPLES);
                 engine_mute_gate(&mut frame, muted);
                 if muted {
@@ -3936,7 +3946,7 @@ mod tests {
             .await
             .expect("the camera opens");
         assert!(pipe.camera_running(), "a started camera reads as on");
-        let frame = tokio::time::timeout(std::time::Duration::from_secs(5), ticks.recv())
+        let frame = crate::platform::time::timeout(std::time::Duration::from_secs(5), ticks.recv())
             .await
             .expect("the camera delivers within five seconds")
             .expect("the preview channel is open");

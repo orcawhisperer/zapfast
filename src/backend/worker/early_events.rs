@@ -5,8 +5,9 @@
 //! until their message is filed, and are dropped after [`MAX_AGE`] or beyond
 //! [`MAX_WAITING`] of a kind.
 
+use crate::platform::Instant;
 use std::collections::VecDeque;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::HistoryReactionBody;
 

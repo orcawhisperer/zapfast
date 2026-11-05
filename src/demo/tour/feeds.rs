@@ -16,6 +16,7 @@
 //! it leaves out, the tiles show the stock stills the screenshots use.
 
 use super::super::stock;
+use crate::platform::FilePath as _;
 use crate::{app::App, video::Frames};
 use egui::ColorImage;
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
@@ -161,7 +162,7 @@ impl Feeds {
         let clips = parse(spec)
             .into_iter()
             .filter_map(|(role, path)| {
-                if !path.is_file() {
+                if !path.found_file() {
                     log::warn!("{VARIABLE}: no file at {}", path.display());
                     return None;
                 }

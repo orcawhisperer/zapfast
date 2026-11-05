@@ -786,7 +786,8 @@ pub fn inter_chosen() -> bool {
 /// The typeface the interface is asked to draw with: the setting's, and
 /// always Inter in tests, so layouts do not depend on the machine.
 fn primary_font() -> fastframe_fonts::Primary {
-    if cfg!(test) || INTER.load(std::sync::atomic::Ordering::Acquire) {
+    // A page has no platform font to use.
+    if cfg!(any(test, target_arch = "wasm32")) || INTER.load(std::sync::atomic::Ordering::Acquire) {
         fastframe_fonts::Primary::Inter
     } else {
         fastframe_fonts::Primary::System
@@ -799,9 +800,11 @@ fn primary_font() -> fastframe_fonts::Primary {
 /// the [`tabular`] timers.
 fn install_fonts(ctx: &egui::Context) {
     let primary = primary_font();
-    let mut fonts = fastframe_fonts::FontSetup::default()
-        .primary(primary)
-        .definitions();
+    let setup = fastframe_fonts::FontSetup::default().primary(primary);
+    // A page cannot read the system's fonts, and the scan's clock panics there.
+    #[cfg(target_arch = "wasm32")]
+    let setup = setup.system_fallbacks(false);
+    let mut fonts = setup.definitions();
     add_tabular(&mut fonts);
     text_rendering().apply_to(&mut fonts);
     ctx.set_fonts(fonts);
@@ -844,7 +847,7 @@ pub fn text_rendering() -> fastframe_text::TextRendering {
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get_or_insert_with(|| {
-            if cfg!(test) {
+            if cfg!(any(test, target_arch = "wasm32")) {
                 fastframe_text::TextRendering::platform_default()
             } else {
                 fastframe_text::detect()
@@ -857,6 +860,10 @@ pub fn text_rendering() -> fastframe_text::TextRendering {
 /// [`apply_text_rendering_change`]. Elsewhere, and without a portal, the
 /// settings read at start stay.
 pub fn follow_text_rendering(wake: impl Fn() + Send + 'static) {
+    // A page has no desktop settings to follow.
+    if cfg!(target_arch = "wasm32") {
+        return;
+    }
     let current = text_rendering();
     let watched = fastframe_text::watch::watch(current, move |rendering| {
         *TEXT_RENDERING

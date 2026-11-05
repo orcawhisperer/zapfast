@@ -1,5 +1,6 @@
 //! The open chat: its header, the messages, and the composer.
 
+use crate::platform::FilePath as _;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -7166,7 +7167,7 @@ fn viewer_file(message: &Message) -> Option<&Path> {
         .content
         .media()
         .and_then(|media| media.path.as_deref())
-        .filter(|path| crate::image_preview::can_view(path) && path.is_file())
+        .filter(|path| crate::image_preview::can_view(path) && path.found_file())
 }
 
 /// Checks every selected message's revoke eligibility with one scan of loaded history.
@@ -10253,7 +10254,7 @@ fn picture(
                 }
                 rect
             }
-            Err(_) if sticker.is_some() || !path.is_file() => {
+            Err(_) if sticker.is_some() || !path.found_file() => {
                 // A sticker has nothing else to open it with, and a file that
                 // is gone has nothing to open: the bubble downloads it again,
                 // or offers to, instead of drawing a dead picture (#603).
@@ -12381,7 +12382,7 @@ mod tests {
         };
 
         let photo = dir.path().join("photo.png");
-        std::fs::write(&photo, b"jpeg").unwrap();
+        crate::platform::sfs::write(&photo, b"jpeg").unwrap();
         let downloaded = picture(&photo);
         assert_eq!(viewer_file(&downloaded), Some(photo.as_path()));
 
@@ -12395,7 +12396,7 @@ mod tests {
 
         // A GIF plays inline as an animation, so the album leaves it out.
         let animation = dir.path().join("animation.gif");
-        std::fs::write(&animation, b"gif").unwrap();
+        crate::platform::sfs::write(&animation, b"gif").unwrap();
         let inline = picture(&animation);
         assert_eq!(viewer_file(&inline), None);
 
@@ -13473,7 +13474,7 @@ mod reaction_tests {
         // #552: the menu came out in English whatever the language.
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");
-        std::fs::write(&file, b"jpeg").unwrap();
+        crate::platform::sfs::write(&file, b"jpeg").unwrap();
         let mut labels = Vec::new();
         for row in menu_fixtures(&file) {
             let spanish = drawn_menu_words(crate::i18n::Locale::Spanish, &row);
@@ -13507,7 +13508,7 @@ mod reaction_tests {
         };
         let directory = tempfile::tempdir().unwrap();
         let file = directory.path().join("photo.jpg");
-        std::fs::write(&file, b"jpeg").unwrap();
+        crate::platform::sfs::write(&file, b"jpeg").unwrap();
         let mut labels: Vec<String> = menu_fixtures(&file)
             .iter()
             .flat_map(|row| drawn_menu_words(crate::i18n::Locale::English, row))
