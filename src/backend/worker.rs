@@ -13854,8 +13854,6 @@ fn percent_encode(text: &str) -> String {
     out
 }
 
-/// Searches GIPHY and downloads result stills. Animated previews are fetched
-/// when their tiles first show. Empty queries list trending GIFs.
 /// A result, with the addresses of its still and animated pictures.
 type GifRow = (Gif, Option<String>, Option<(String, &'static str)>);
 
@@ -13972,6 +13970,8 @@ fn gif_cached_pictures(dir: &Path, row: &mut GifRow) -> Option<(String, PathBuf)
     still.take().zip(still_path)
 }
 
+/// Searches GIPHY and downloads result stills. Animated previews are fetched
+/// when their tiles first show. Empty queries list trending GIFs.
 #[cfg(not(target_arch = "wasm32"))]
 fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifPage, GifError> {
     let plain = |message: String| GifError {
