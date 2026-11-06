@@ -43,6 +43,9 @@ Without one, the app asks for a key in its settings.
   icon, including while the tab is hidden. Permission is asked on the first click.
   Browsers that only offer them through a service worker, such as on Android, show
   none. With the browser closed nothing arrives.
+- Recording voice messages. The microphone reaches the page through an audio worklet,
+  and the browser's WebCodecs encoder makes the Opus, so a browser without it says so
+  when the message is sent. The app asks for the microphone on the first recording.
 - Installing as an app, and starting without a network on the archive already held.
 - GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video
@@ -71,8 +74,7 @@ Without one, the app asks for a key in its settings.
 
 - **Colour emoji in plain labels.** Messages and chat names have them, drawn by the
   browser. Menus and tooltips keep the fonts' monochrome glyphs.
-- **Recording voice messages, and a call's camera and sound.** The Opus and H.264
-  stand-ins always refuse.
+- **A call's camera and sound.** The Opus and H.264 stand-ins always refuse.
 - **Signal sticker packs.** They still use the blocking client, which always fails
   in a page, and Signal's servers refuse requests from a page anyway.
 - **Background work.** The app shares the page's one thread, so decoding and a

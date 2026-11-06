@@ -635,14 +635,17 @@ fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
     Ok(voice::mono_at_rate(&interleaved, channels, rate))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type Outcome = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
 
 /// Records until told to stop, pushing a level per 50 ms and calling the
 /// wake function after each, and returns the mono 48 kHz samples.
+#[cfg(not(target_arch = "wasm32"))]
 type Take = fn(&AtomicBool, &Live, &dyn Fn()) -> Result<Vec<f32>, String>;
 
 /// What a take shows while it records: a loudness per 50 ms, and when the
 /// microphone first delivered sound.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 struct Live {
     levels: Mutex<Vec<f32>>,
@@ -653,6 +656,7 @@ struct Live {
     began: std::sync::OnceLock<Instant>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Live {
     fn push(&self, level: f32) {
         self.levels
@@ -666,7 +670,11 @@ impl Live {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+pub use crate::web::recorder::Recorder;
+
 /// Records from the default microphone until told to stop.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Recorder {
     stop: Arc<AtomicBool>,
     /// Loudness for each recorded 50 ms segment, and when sound first came.
@@ -678,6 +686,7 @@ pub struct Recorder {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Recorder {
     pub fn start(waker: Waker) -> Self {
         Self::spawn(waker, record)
@@ -820,6 +829,7 @@ impl Recorder {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Recorder {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -827,7 +837,7 @@ impl Drop for Recorder {
 }
 
 /// A speech-like tone for [`Recorder::simulated`], one level per 50 ms.
-#[cfg(any(test, feature = "demo"))]
+#[cfg(all(any(test, feature = "demo"), not(target_arch = "wasm32")))]
 fn rehearse(stop: &AtomicBool, live: &Live, wake: &dyn Fn()) -> Result<Vec<f32>, String> {
     live.begin();
     let segment = voice::RATE as usize / 20;
@@ -850,11 +860,13 @@ fn rehearse(stop: &AtomicBool, live: &Live, wake: &dyn Fn()) -> Result<Vec<f32>,
     Ok(samples)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn record(stop: &AtomicBool, live: &Live, wake: &dyn Fn()) -> Result<Vec<f32>, String> {
     record_from(open_microphone, STALLED_MICROPHONE, stop, live, wake)
 }
 
 /// Opens the default microphone, with its channel count and sample rate.
+#[cfg(not(target_arch = "wasm32"))]
 fn open_microphone() -> Result<(Microphone, u16, u32), String> {
     let microphone = Microphone::open(fastframe_audio::Device::Default, "voice recording", false)?;
     let channels = microphone.channels();
@@ -868,6 +880,7 @@ fn open_microphone() -> Result<(Microphone, u16, u32), String> {
 /// for the device to open, and this one waits for it with a timeout: a
 /// device that stalls without reporting an error cannot keep a stop or the
 /// stall limit from ending the recording.
+#[cfg(not(target_arch = "wasm32"))]
 fn record_from<M: Iterator<Item = f32>>(
     open: impl FnOnce() -> Result<(M, u16, u32), String> + Send + 'static,
     stalled: Duration,
@@ -922,6 +935,7 @@ fn record_from<M: Iterator<Item = f32>>(
 }
 
 /// Samples in 50 ms of interleaved audio: one loudness for the live bars.
+#[cfg(not(target_arch = "wasm32"))]
 fn chunk_len(channels: u16, rate: u32) -> usize {
     (rate as usize * usize::from(channels) / 20).max(1)
 }
@@ -930,14 +944,17 @@ fn chunk_len(channels: u16, rate: u32) -> usize {
 ///
 /// A read comes back empty whenever the microphone has captured nothing
 /// new, so an empty read alone does not mean the device is gone (#382).
+#[cfg(not(target_arch = "wasm32"))]
 const STALLED_MICROPHONE: Duration = Duration::from_secs(1);
 
 /// How often a wait for the microphone looks at the stop and stall limits.
+#[cfg(not(target_arch = "wasm32"))]
 const POLL_MICROPHONE: Duration = Duration::from_millis(10);
 
 /// Sends the microphone's samples in blocks of up to `block` until `done` or
 /// until nobody is listening. Empty reads are waited out, not taken for the
 /// end of the device (see [`STALLED_MICROPHONE`]).
+#[cfg(not(target_arch = "wasm32"))]
 fn read_microphone(
     microphone: &mut impl Iterator<Item = f32>,
     block: usize,
@@ -958,6 +975,7 @@ fn read_microphone(
 /// none has arrived for `stalled` since the first. Waiting for the first is
 /// left to `stop`: a device can be slow to start. Sets `done` for the reader
 /// and keeps what had already arrived.
+#[cfg(not(target_arch = "wasm32"))]
 fn capture(
     samples: &mpsc::Receiver<Vec<f32>>,
     chunk: usize,

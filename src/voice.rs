@@ -7,13 +7,13 @@ use std::io::Cursor;
 /// Opus sample rate used for every mono clip.
 pub const RATE: u32 = 48_000;
 /// One Opus frame: 20 ms.
-const FRAME: usize = 960;
+pub(crate) const FRAME: usize = 960;
 /// Maximum decoded Opus packet size: 120 ms of stereo.
 const LONGEST_PACKET: usize = 5760 * 2;
 /// Number of bars in a WhatsApp voice-message waveform.
 pub const BARS: usize = 64;
 /// Target bitrate for speech, similar to the phone.
-const BITRATE: i32 = 32_000;
+pub(crate) const BITRATE: i32 = 32_000;
 
 /// Mono samples at `RATE` from an OGG/Opus file.
 pub fn decode(bytes: &[u8]) -> Result<Vec<f32>, String> {
@@ -137,7 +137,6 @@ impl Stream {
 
 /// An OGG/Opus file from mono samples at `RATE`.
 pub fn encode(samples: &[f32]) -> Result<Vec<u8>, String> {
-    use ogg::PacketWriteEndInfo::{EndPage, EndStream, NormalPacket};
     let mut encoder = opus::Encoder::new(RATE, opus::Channels::Mono, opus::Application::Voip)
         .map_err(|error| error.to_string())?;
     encoder
@@ -147,19 +146,11 @@ pub fn encode(samples: &[f32]) -> Result<Vec<u8>, String> {
         .get_lookahead()
         .map_err(|error| error.to_string())?
         .max(0) as usize;
-    let serial = 0x5641_5341;
-    let io = |error: std::io::Error| error.to_string();
-    let mut writer = ogg::PacketWriter::new(Vec::new());
-    writer
-        .write_packet(opus_head(pre_skip as u16), serial, EndPage, 0)
-        .map_err(io)?;
-    writer
-        .write_packet(opus_tags(), serial, EndPage, 0)
-        .map_err(io)?;
     // Append silence to flush encoder lookahead. The final granule trims it.
     let frames = (samples.len() + pre_skip).div_ceil(FRAME).max(1);
     let mut frame = vec![0f32; FRAME];
     let mut packet = vec![0u8; 4000];
+    let mut packets = Vec::with_capacity(frames);
     for index in 0..frames {
         frame.fill(0.0);
         let start = index * FRAME;
@@ -170,12 +161,34 @@ pub fn encode(samples: &[f32]) -> Result<Vec<u8>, String> {
         let written = encoder
             .encode_float(&frame, &mut packet)
             .map_err(|error| error.to_string())?;
-        let last = index + 1 == frames;
-        let granule = if last {
-            (pre_skip + samples.len()) as u64
-        } else {
-            ((index + 1) * FRAME) as u64
-        };
+        packets.push((packet[..written].to_vec(), FRAME as u64));
+    }
+    wrap_packets(&packets, pre_skip as u16, samples.len())
+}
+
+/// An OGG/Opus file from encoded `packets`, each with the samples it holds, for
+/// `samples` samples of sound after an encoder delay of `pre_skip`. Packets past the
+/// sound's end are left out, and the final granule trims the last one to it.
+pub(crate) fn wrap_packets(
+    packets: &[(Vec<u8>, u64)],
+    pre_skip: u16,
+    samples: usize,
+) -> Result<Vec<u8>, String> {
+    use ogg::PacketWriteEndInfo::{EndPage, EndStream, NormalPacket};
+    let serial = 0x5641_5341;
+    let io = |error: std::io::Error| error.to_string();
+    let mut writer = ogg::PacketWriter::new(Vec::new());
+    writer
+        .write_packet(opus_head(pre_skip), serial, EndPage, 0)
+        .map_err(io)?;
+    writer
+        .write_packet(opus_tags(), serial, EndPage, 0)
+        .map_err(io)?;
+    let wanted = u64::from(pre_skip) + samples as u64;
+    let mut granule = 0;
+    for (index, (packet, held)) in packets.iter().enumerate() {
+        granule += held;
+        let last = index + 1 == packets.len() || granule >= wanted;
         let end = if last {
             EndStream
         } else if (index + 1) % 50 == 0 {
@@ -183,9 +196,13 @@ pub fn encode(samples: &[f32]) -> Result<Vec<u8>, String> {
         } else {
             NormalPacket
         };
+        let stamp = if last { granule.min(wanted) } else { granule };
         writer
-            .write_packet(packet[..written].to_vec(), serial, end, granule)
+            .write_packet(packet.clone(), serial, end, stamp)
             .map_err(io)?;
+        if last {
+            break;
+        }
     }
     Ok(writer.into_inner())
 }
@@ -280,6 +297,43 @@ pub fn mono_at_rate(interleaved: &[f32], channels: u16, rate: u32) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A browser's encoder runs on past the sound. The file stops at the packet
+    /// that reaches its end, and says exactly where that end is.
+    #[test]
+    fn wrapped_packets_stop_at_the_end_of_the_sound() {
+        let packets: Vec<(Vec<u8>, u64)> = (0..6u8).map(|n| (vec![n; 3], FRAME as u64)).collect();
+        let file = wrap_packets(&packets, 312, 2 * FRAME).unwrap();
+        let mut reader = ogg::PacketReader::new(Cursor::new(&file[..]));
+        let mut read = Vec::new();
+        while let Some(packet) = reader.read_packet().unwrap() {
+            let (granule, ended) = (packet.absgp_page(), packet.last_in_stream());
+            read.push((packet.data, granule, ended));
+        }
+        assert!(read[0].0.starts_with(b"OpusHead"));
+        assert_eq!(u16::from_le_bytes([read[0].0[10], read[0].0[11]]), 312);
+        assert!(read[1].0.starts_with(b"OpusTags"));
+        let sound = &read[2..];
+        assert_eq!(sound.len(), 3, "312 + 1920 samples end in the third packet");
+        let last = sound.last().unwrap();
+        assert_eq!(last.0, vec![2u8; 3]);
+        assert_eq!(last.1, 312 + 2 * FRAME as u64);
+        assert!(last.2);
+    }
+
+    /// When the encoder comes up short the file ends where its sound does, and
+    /// never claims samples it does not hold.
+    #[test]
+    fn wrapped_packets_never_claim_more_than_they_hold() {
+        let packets = vec![(vec![1u8; 3], FRAME as u64)];
+        let file = wrap_packets(&packets, 312, 10 * FRAME).unwrap();
+        let mut reader = ogg::PacketReader::new(Cursor::new(&file[..]));
+        let mut last = None;
+        while let Some(packet) = reader.read_packet().unwrap() {
+            last = Some((packet.absgp_page(), packet.last_in_stream()));
+        }
+        assert_eq!(last, Some((FRAME as u64, true)));
+    }
 
     fn tone(seconds: f32) -> Vec<f32> {
         (0..(RATE as f32 * seconds) as usize)

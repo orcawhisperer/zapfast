@@ -11747,17 +11747,7 @@ impl Worker {
         let me = self.me();
         crate::platform::spawn(async move {
             let outcome = async {
-                let (bytes, seconds, waveform) = crate::platform::spawn_blocking(move || {
-                    let mut samples = samples;
-                    crate::voice::normalize(&mut samples);
-                    let seconds = (samples.len() as f64 / f64::from(crate::voice::RATE))
-                        .round()
-                        .max(1.0) as u32;
-                    let waveform = crate::voice::waveform(&samples);
-                    crate::voice::encode(&samples).map(|bytes| (bytes, seconds, waveform))
-                })
-                .await
-                .map_err(|error| error.to_string())??;
+                let (bytes, seconds, waveform) = encode_take(samples).await?;
                 let prepared = prepare_voice(&client, bytes, seconds, waveform, context).await?;
                 file_outbound(&client, &chat, &me, &dir, prepared, None, Vec::new()).await
             }
@@ -13556,6 +13546,35 @@ async fn upload_media_counted(
 }
 
 /// Uploads a recording and builds a push-to-talk message with waveform.
+/// A take's length and waveform, once brought up to a good loudness.
+fn finish_take(samples: &mut [f32]) -> (u32, Vec<u8>) {
+    crate::voice::normalize(samples);
+    let seconds = (samples.len() as f64 / f64::from(crate::voice::RATE))
+        .round()
+        .max(1.0) as u32;
+    (seconds, crate::voice::waveform(samples))
+}
+
+/// A take's file, with its length in seconds and its waveform.
+#[cfg(not(target_arch = "wasm32"))]
+async fn encode_take(samples: Vec<f32>) -> Result<(Vec<u8>, u32, Vec<u8>), String> {
+    crate::platform::spawn_blocking(move || {
+        let mut samples = samples;
+        let (seconds, waveform) = finish_take(&mut samples);
+        crate::voice::encode(&samples).map(|bytes| (bytes, seconds, waveform))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+/// A take's file, with its length in seconds and its waveform.
+#[cfg(target_arch = "wasm32")]
+async fn encode_take(mut samples: Vec<f32>) -> Result<(Vec<u8>, u32, Vec<u8>), String> {
+    let (seconds, waveform) = finish_take(&mut samples);
+    let bytes = crate::web::voice::encode(&samples).await?;
+    Ok((bytes, seconds, waveform))
+}
+
 async fn prepare_voice(
     client: &Client,
     bytes: Vec<u8>,

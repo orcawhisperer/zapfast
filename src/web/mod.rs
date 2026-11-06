@@ -12,6 +12,7 @@ pub mod notify;
 pub mod open;
 pub mod picker;
 pub mod player;
+pub mod recorder;
 pub mod rfd;
 pub mod runtime;
 pub mod sfs;
@@ -21,5 +22,6 @@ pub mod time;
 pub mod tokio_fs;
 pub mod transport;
 pub mod video;
+pub mod voice;
 
 pub use entry::start;
