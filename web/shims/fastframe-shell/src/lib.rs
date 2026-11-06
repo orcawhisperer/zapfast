@@ -33,6 +33,15 @@ pub trait Resident {
     fn shutdown(&mut self);
 }
 
+thread_local! {
+    static ON_WAKE: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Calls `hook` on every wake, for what a repaint alone cannot reach.
+pub fn on_wake(hook: impl Fn() + 'static) {
+    ON_WAKE.with_borrow_mut(|slot| *slot = Some(Box::new(hook)));
+}
+
 /// Wakes the window from other tasks.
 #[derive(Clone, Default)]
 pub struct Waker {
@@ -60,6 +69,12 @@ impl Waker {
         if let Some(ctx) = self.context() {
             ctx.request_repaint();
         }
+        // A repaint never comes while the tab is hidden.
+        ON_WAKE.with_borrow(|hook| {
+            if let Some(hook) = hook {
+                hook();
+            }
+        });
     }
 
     pub fn wake_after(&self, delay: Duration) {

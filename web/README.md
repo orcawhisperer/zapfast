@@ -32,12 +32,12 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 - The interface with the sample chats: drawing, clicks, navigation, typing.
 - Without `?demo`, a real account: linking by QR code, syncing chats, sending and
   receiving messages, and staying linked across a reload.
-- Attachments from the picker, a drop, or a paste, and files offered as browser
-  downloads. Sending one has not been tried on an account yet.
+- Attachments from the picker, a drop, or a paste, with progress both ways, and files
+  offered as browser downloads.
 - Notifications, with their sounds, and the unread count in the tab and on the app's
-  icon. Permission is asked on the first click. They have not been tried on an
-  account yet, and browsers that only offer them through a service worker, such as
-  on Android, show none.
+  icon, including while the tab is hidden. Permission is asked on the first click.
+  Browsers that only offer them through a service worker, such as on Android, show
+  none. With the browser closed nothing arrives.
 - Installing as an app, and starting without a network on the archive already held.
 - Playing voice messages and videos, through the browser's own audio and video
   elements. Which formats play depends on the browser. GIF-style clips step through

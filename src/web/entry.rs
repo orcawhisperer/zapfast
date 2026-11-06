@@ -1,5 +1,8 @@
 //! Starts ZapFast on the page's canvas.
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
 use wasm_bindgen::JsCast;
 
 use crate::app::App;
@@ -8,6 +11,10 @@ use crate::settings::Settings;
 
 /// The root of the page's files, a path only ZapFast's own storage ever reads.
 const ROOT: &str = "/zapfast";
+
+/// How often a hidden tab looks for work with no wake to prompt it. Browsers slow
+/// a hidden page's timers further on their own.
+const HIDDEN_TICK_MS: u32 = 5_000;
 
 /// The canvas `index.html` provides.
 const CANVAS: &str = "zapfast";
@@ -243,7 +250,9 @@ async fn run() -> Result<(), String> {
                 crate::web::picker::listen_for_pastes(cc.egui_ctx.clone());
                 cc.egui_ctx
                     .add_bytes_loader(std::sync::Arc::new(crate::web::images::PageFiles));
-                let app = make_app(&cc.egui_ctx, &waker)?;
+                let app = Rc::new(RefCell::new(make_app(&cc.egui_ctx, &waker)?));
+                work_while_hidden(&app, &cc.egui_ctx);
+                hide_loading_note();
                 Ok(Box::new(Page {
                     app,
                     shown_unread: None,
@@ -256,6 +265,7 @@ async fn run() -> Result<(), String> {
 
 /// Says why nothing appeared, in the page itself.
 fn show_failure(reason: &str) {
+    hide_loading_note();
     let element = web_sys::window()
         .and_then(|window| window.document())
         .and_then(|document| document.get_element_by_id("failure"));
@@ -264,19 +274,86 @@ fn show_failure(reason: &str) {
     }
 }
 
+/// Removes what the page shows while the program downloads and starts.
+fn hide_loading_note() {
+    let element = web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.get_element_by_id("loading"));
+    if let Some(element) = element {
+        element.remove();
+    }
+}
+
+/// Whether the person is looking at the page right now. eframe only counts the
+/// canvas itself holding focus, which is not the same.
+fn page_in_focus() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| !document.hidden() && document.has_focus().unwrap_or(false))
+}
+
+fn page_hidden() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .is_some_and(|document| document.hidden())
+}
+
+/// Keeps the app working while the tab is hidden, when the browser stops drawing
+/// frames: on each wake from the worker, and on a slow timer for what is due anyway.
+/// Runs what the desktop runs with its window closed, which handles arriving messages
+/// and shows their notifications.
+fn work_while_hidden(app: &Rc<RefCell<App>>, ctx: &egui::Context) {
+    fn pass(app: &Rc<RefCell<App>>, ctx: &egui::Context) {
+        if !page_hidden() {
+            return;
+        }
+        // Taken only if a frame is not using it: a hidden page has none running.
+        if let Ok(mut app) = app.try_borrow_mut() {
+            app.window_focused = false;
+            app.background_frame(ctx);
+        }
+    }
+    let waiting = Rc::new(Cell::new(false));
+    {
+        let (app, ctx) = (app.clone(), ctx.clone());
+        fastframe_shell::on_wake(move || {
+            // A wake can come from inside the app, so its pass waits its turn.
+            if !page_hidden() || waiting.replace(true) {
+                return;
+            }
+            let (app, ctx, waiting) = (app.clone(), ctx.clone(), waiting.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                waiting.set(false);
+                pass(&app, &ctx);
+            });
+        });
+    }
+    let (app, ctx) = (app.clone(), ctx.clone());
+    gloo_timers::callback::Interval::new(HIDDEN_TICK_MS, move || pass(&app, &ctx)).forget();
+}
+
 /// The app in the browser's window.
 struct Page {
-    app: App,
+    app: Rc<RefCell<App>>,
     /// The unread count last shown in the tab and on the app's icon.
     shown_unread: Option<u32>,
 }
 
 impl eframe::App for Page {
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let focused = page_in_focus();
+        raw_input.focused = focused;
+        if let Some(viewport) = raw_input.viewports.get_mut(&egui::ViewportId::ROOT) {
+            viewport.focused = Some(focused);
+        }
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.app.background_frame(ctx);
-        self.app.window_logic(ctx);
+        let mut app = self.app.borrow_mut();
+        app.background_frame(ctx);
+        app.window_logic(ctx);
         // The app's own count, which leaves out locked chats.
-        let unread = self.app.unread_chat_count_everywhere();
+        let unread = app.unread_chat_count_everywhere();
         if self.shown_unread != Some(unread) {
             self.shown_unread = Some(unread);
             crate::web::notify::show_unread(unread);
@@ -284,8 +361,9 @@ impl eframe::App for Page {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.app.frame_ui(ui);
-        for account in &mut self.app.accounts {
+        let mut app = self.app.borrow_mut();
+        app.frame_ui(ui);
+        for account in &mut app.accounts {
             if let Some(startup) = account.backend.take_startup() {
                 let _ = startup.send(());
             }

@@ -14,14 +14,23 @@
       #failure { position: fixed; inset: 0 0 auto 0; padding: 16px; color: #e9edef;
         font: 14px system-ui, sans-serif; white-space: pre-wrap; }
       #failure:empty { display: none; }
+      #loading { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 16px;
+        align-items: center; justify-content: center; color: #8696a0;
+        font: 14px system-ui, sans-serif; }
+      #loading i { width: 28px; height: 28px; border-radius: 50%; border: 3px solid #2a3942;
+        border-top-color: #00a884; animation: spin 0.9s linear infinite; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      @media (prefers-reduced-motion: reduce) { #loading i { animation-duration: 3s; } }
     </style>
   </head>
   <body>
     <canvas id="zapfast"></canvas>
+    <div id="loading"><i></i><span>Starting ZapFast</span></div>
     <div id="failure"></div>
     <script type="module">
       import init from "./zapfast-web.js";
       init().catch((error) => {
+        document.getElementById("loading")?.remove();
         document.getElementById("failure").textContent = String(error);
       });
     </script>
