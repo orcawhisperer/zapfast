@@ -78,13 +78,21 @@ impl FilePath for std::path::Path {
 }
 #[cfg(not(target_arch = "wasm32"))]
 pub use rfd::FileDialog;
+/// Asks for one file, away from the window, and runs `then` with the choice.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn pick_file_then(
+    dialog: FileDialog,
+    then: impl FnOnce(Option<std::path::PathBuf>) + Send + 'static,
+) {
+    spawn_blocking(move || then(dialog.pick_file()));
+}
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio::fs;
 
 #[cfg(target_arch = "wasm32")]
 pub use crate::web::open;
 #[cfg(target_arch = "wasm32")]
-pub use crate::web::rfd::FileDialog;
+pub use crate::web::rfd::{FileDialog, pick_file_then};
 #[cfg(target_arch = "wasm32")]
 pub use crate::web::tokio_fs as fs;
 

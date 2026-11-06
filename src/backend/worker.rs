@@ -7706,17 +7706,29 @@ impl Worker {
             Command::PickChatSound(chat) => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                crate::platform::spawn_blocking(move || {
-                    if let Some(path) = crate::platform::FileDialog::new()
-                        .set_title("Choose a notification sound")
-                        .add_filter("Audio", &["wav", "mp3", "ogg", "oga"])
-                        .pick_file()
-                    {
-                        let _ = events.send(Event::ChatSoundPicked { chat, path });
-                        waker.wake();
-                    }
+                let state = self.dirs.state.clone();
+                let dialog = crate::platform::FileDialog::new()
+                    .set_title("Choose a notification sound")
+                    .add_filter("Audio", &["wav", "mp3", "ogg", "oga"]);
+                crate::platform::pick_file_then(dialog, move |path| {
+                    let Some(path) = path else {
+                        return;
+                    };
+                    let _ = events.send(match kept_sound(path, &state) {
+                        Ok(path) => Event::ChatSoundPicked { chat, path },
+                        Err(error) => Event::Error(error),
+                    });
+                    waker.wake();
                 });
             }
+            // A browser saves downloads where its own settings say.
+            #[cfg(target_arch = "wasm32")]
+            Command::PickDownloadFolder => {
+                self.emit(Event::Info(
+                    "The browser's settings choose where downloads go".to_owned(),
+                ));
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             Command::PickDownloadFolder => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
@@ -7734,12 +7746,11 @@ impl Worker {
                 let dirs = self.dirs.clone();
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                crate::platform::spawn_blocking(move || {
-                    let Some(path) = crate::platform::FileDialog::new()
-                        .set_title("Choose a wallpaper image")
-                        .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
-                        .pick_file()
-                    else {
+                let dialog = crate::platform::FileDialog::new()
+                    .set_title("Choose a wallpaper image")
+                    .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"]);
+                crate::platform::pick_file_then(dialog, move |path| {
+                    let Some(path) = path else {
                         return;
                     };
                     let result = crate::wallpaper::import(&path, &dirs.state);
@@ -7753,12 +7764,11 @@ impl Worker {
                 let commands = self.commands.clone();
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                crate::platform::spawn_blocking(move || {
-                    let Some(path) = crate::platform::FileDialog::new()
-                        .set_title("Choose a profile picture")
-                        .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
-                        .pick_file()
-                    else {
+                let dialog = crate::platform::FileDialog::new()
+                    .set_title("Choose a profile picture")
+                    .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"]);
+                crate::platform::pick_file_then(dialog, move |path| {
+                    let Some(path) = path else {
                         return;
                     };
                     match profile_picture_jpeg(&path) {
@@ -7825,12 +7835,11 @@ impl Worker {
                 let commands = self.commands.clone();
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                crate::platform::spawn_blocking(move || {
-                    let Some(path) = crate::platform::FileDialog::new()
-                        .set_title("Choose a group photo")
-                        .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
-                        .pick_file()
-                    else {
+                let dialog = crate::platform::FileDialog::new()
+                    .set_title("Choose a group photo")
+                    .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"]);
+                crate::platform::pick_file_then(dialog, move |path| {
+                    let Some(path) = path else {
                         return;
                     };
                     match profile_picture_jpeg(&path) {
@@ -7907,17 +7916,36 @@ impl Worker {
             Command::PickNotificationSound { mention } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
-                crate::platform::spawn_blocking(move || {
-                    if let Some(path) = crate::platform::FileDialog::new()
-                        .set_title("Choose a notification sound")
-                        .add_filter("Audio", &["wav", "mp3", "ogg", "oga"])
-                        .pick_file()
-                    {
-                        let _ = events.send(Event::NotificationSoundPicked { mention, path });
+                let state = self.dirs.state.clone();
+                let dialog = crate::platform::FileDialog::new()
+                    .set_title("Choose a notification sound")
+                    .add_filter("Audio", &["wav", "mp3", "ogg", "oga"]);
+                crate::platform::pick_file_then(dialog, move |path| {
+                    let Some(path) = path else {
+                        return;
+                    };
+                    let _ = events.send(match kept_sound(path, &state) {
+                        Ok(path) => Event::NotificationSoundPicked { mention, path },
+                        Err(error) => Event::Error(error),
+                    });
+                    waker.wake();
+                });
+            }
+            // A page cannot ask where to save: the browser's download does.
+            #[cfg(target_arch = "wasm32")]
+            Command::SaveAttachmentAs { source, name } => {
+                let events = self.events.clone();
+                let waker = self.waker.clone();
+                crate::platform::spawn(async move {
+                    if let Err(error) = crate::web::open::offer(&source, &name).await {
+                        let _ = events.send(Event::Error(format!(
+                            "Could not save the attachment: {error}"
+                        )));
                         waker.wake();
                     }
                 });
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Command::SaveAttachmentAs { source, name } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
@@ -7966,6 +7994,26 @@ impl Worker {
                     }
                 });
             }
+            #[cfg(target_arch = "wasm32")]
+            Command::SaveAttachments { files } => {
+                let events = self.events.clone();
+                let waker = self.waker.clone();
+                crate::platform::spawn(async move {
+                    let mut saved = 0usize;
+                    let mut failed = Vec::new();
+                    for (source, name) in files {
+                        match crate::web::open::offer(&source, &name).await {
+                            Ok(()) => saved += 1,
+                            Err(error) => failed.push(format!("{name}: {error}")),
+                        }
+                        // A browser drops downloads that start in the same moment.
+                        crate::platform::time::sleep(Duration::from_millis(300)).await;
+                    }
+                    let _ = events.send(album_saved(saved, &failed));
+                    waker.wake();
+                });
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             Command::SaveAttachments { files } => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
@@ -7987,19 +8035,44 @@ impl Worker {
                             Err(error) => failed.push(format!("{name}: {error}")),
                         }
                     }
-                    let event = if failed.is_empty() {
-                        Event::Info(format!("Saved {saved} album attachments"))
-                    } else {
-                        Event::Error(format!(
-                            "Saved {saved} album attachments; {} could not be saved: {}",
-                            failed.len(),
-                            failed.join("; ")
-                        ))
-                    };
-                    let _ = events.send(event);
+                    let _ = events.send(album_saved(saved, &failed));
                     waker.wake();
                 });
             }
+            // The window's own clipboard cannot wait for the browser, so the picture
+            // is copied here and an empty one tells the window how that went.
+            #[cfg(target_arch = "wasm32")]
+            Command::PrepareClipboardImage(path) => {
+                let events = self.events.clone();
+                let waker = self.waker.clone();
+                crate::platform::spawn(async move {
+                    crate::web::sfs::ensure_loaded(&path).await;
+                    let copied = async {
+                        let bytes =
+                            crate::platform::sfs::read(&path).map_err(|error| error.to_string())?;
+                        let picture =
+                            image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+                        let mut png = std::io::Cursor::new(Vec::new());
+                        picture
+                            .to_rgba8()
+                            .write_to(&mut png, image::ImageFormat::Png)
+                            .map_err(|error| error.to_string())?;
+                        crate::web::pictures::copy_png(png.get_ref())
+                            .await
+                            .map_err(|_| "the browser refused the clipboard".to_owned())
+                    }
+                    .await;
+                    let _ = events.send(Event::ClipboardImage(copied.map(|()| {
+                        crate::model::DecodedImage {
+                            width: 0,
+                            height: 0,
+                            bytes: Vec::new(),
+                        }
+                    })));
+                    waker.wake();
+                });
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             Command::PrepareClipboardImage(path) => {
                 let events = self.events.clone();
                 let waker = self.waker.clone();
@@ -8021,12 +8094,11 @@ impl Worker {
             }
             Command::PickStickerPicture => {
                 let commands = self.commands.clone();
-                crate::platform::spawn_blocking(move || {
-                    let result = match crate::platform::FileDialog::new()
-                        .set_title("Make a sticker")
-                        .add_filter("Pictures", &["png", "jpg", "jpeg", "webp", "gif"])
-                        .pick_file()
-                    {
+                let dialog = crate::platform::FileDialog::new()
+                    .set_title("Make a sticker")
+                    .add_filter("Pictures", &["png", "jpg", "jpeg", "webp", "gif"]);
+                crate::platform::pick_file_then(dialog, move |path| {
+                    let result = match path {
                         Some(path) => crate::platform::sfs::read(&path)
                             .map_err(|error| error.to_string())
                             .and_then(|bytes| super::sticker_maker::inspect(&bytes))
@@ -8057,21 +8129,30 @@ impl Worker {
             } => {
                 let commands = self.commands.clone();
                 let dir = self.dirs.sticker_cache_dir().join("made");
+                #[cfg(target_arch = "wasm32")]
+                crate::platform::spawn(async move {
+                    let bytes = crate::platform::sfs::read(&source);
+                    let made = match bytes {
+                        Ok(bytes) => {
+                            super::sticker_maker::make(&bytes, crop, transparent, &emojis).await
+                        }
+                        Err(error) => Err(error.to_string()),
+                    };
+                    let result = made.and_then(|sticker| store_made_sticker(&dir, sticker));
+                    let _ = commands.send(Command::StickerMade {
+                        result,
+                        chat,
+                        quoting,
+                    });
+                });
+                #[cfg(not(target_arch = "wasm32"))]
                 crate::platform::spawn_blocking(move || {
                     let result = crate::platform::sfs::read(&source)
                         .map_err(|error| error.to_string())
                         .and_then(|bytes| {
                             super::sticker_maker::make(&bytes, crop, transparent, &emojis)
                         })
-                        .and_then(|sticker| {
-                            crate::platform::sfs::create_dir_all(&dir)
-                                .map_err(|error| error.to_string())?;
-                            let hash = super::sticker_store::content_hash(&sticker);
-                            let path = dir.join(format!("{hash}.webp"));
-                            crate::platform::sfs::write(&path, sticker)
-                                .map_err(|error| error.to_string())?;
-                            Ok(path)
-                        });
+                        .and_then(|sticker| store_made_sticker(&dir, sticker));
                     let _ = commands.send(Command::StickerMade {
                         result,
                         chat,
@@ -8142,12 +8223,11 @@ impl Worker {
             Command::PickStickerArchive => {
                 let commands = self.commands.clone();
                 let packs = self.packs_dir();
-                crate::platform::spawn_blocking(move || {
-                    let result = match crate::platform::FileDialog::new()
-                        .set_title("Add a sticker pack")
-                        .add_filter("Sticker packs", &["wastickers", "zip"])
-                        .pick_file()
-                    {
+                let dialog = crate::platform::FileDialog::new()
+                    .set_title("Add a sticker pack")
+                    .add_filter("Sticker packs", &["wastickers", "zip"]);
+                crate::platform::pick_file_then(dialog, move |path| {
+                    let result = match path {
                         Some(path) => super::sticker_import::import_archive(&path, &packs),
                         // Ignore file-picker cancellation.
                         None => Err(String::new()),
@@ -13325,7 +13405,8 @@ async fn download_avatar(url: String, path: PathBuf) -> Result<PathBuf, String> 
 /// Crops a picture file to a centred square and encodes it at the size
 /// WhatsApp uses for profile and group pictures.
 fn profile_picture_jpeg(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    square_picture_jpeg(&image::open(path).map_err(|error| error.to_string())?)
+    let bytes = crate::platform::sfs::read(path).map_err(|error| error.to_string())?;
+    square_picture_jpeg(&image::load_from_memory(&bytes).map_err(|error| error.to_string())?)
 }
 
 /// Crops a picture to a centred square, scales it down to 640 pixels (a
@@ -13546,6 +13627,40 @@ async fn upload_media_counted(
 }
 
 /// Uploads a recording and builds a push-to-talk message with waveform.
+/// Files a made sticker under its content's name.
+fn store_made_sticker(dir: &Path, sticker: Vec<u8>) -> Result<PathBuf, String> {
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| error.to_string())?;
+    let hash = super::sticker_store::content_hash(&sticker);
+    let path = dir.join(format!("{hash}.webp"));
+    crate::platform::sfs::write(&path, sticker).map_err(|error| error.to_string())?;
+    Ok(path)
+}
+
+/// What saving an album comes to.
+fn album_saved(saved: usize, failed: &[String]) -> Event {
+    if failed.is_empty() {
+        Event::Info(format!("Saved {saved} album attachments"))
+    } else {
+        Event::Error(format!(
+            "Saved {saved} album attachments; {} could not be saved: {}",
+            failed.len(),
+            failed.join("; ")
+        ))
+    }
+}
+
+/// Where a picked notification sound stays. The desktop plays it from where it is.
+#[cfg(not(target_arch = "wasm32"))]
+fn kept_sound(path: PathBuf, _state: &Path) -> Result<PathBuf, String> {
+    Ok(path)
+}
+
+/// Where a picked notification sound stays. The desktop plays it from where it is.
+#[cfg(target_arch = "wasm32")]
+fn kept_sound(path: PathBuf, state: &Path) -> Result<PathBuf, String> {
+    crate::web::picker::keep_sound(&path, state)
+}
+
 /// A take's length and waveform, once brought up to a good loudness.
 fn finish_take(samples: &mut [f32]) -> (u32, Vec<u8>) {
     crate::voice::normalize(samples);

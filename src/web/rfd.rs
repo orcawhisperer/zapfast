@@ -1,17 +1,22 @@
-//! rfd's blocking `FileDialog`, which rfd leaves out of wasm builds. A browser
-//! opens its picker only from a click and answers asynchronously, so until the
-//! composer drives that, no dialog ever returns a file.
+//! rfd's `FileDialog`, which rfd leaves out of wasm builds. A browser opens its
+//! picker only soon after a click and answers later, so a choice arrives through
+//! [`pick_file_then`], and a page has no way to ask where to save: nothing is ever
+//! chosen from [`FileDialog::save_file`].
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Default)]
-pub struct FileDialog;
+pub struct FileDialog {
+    /// The extensions offered, as the picker's `accept` attribute spells them.
+    accept: Vec<String>,
+}
 
 impl FileDialog {
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
+    /// A browser's picker has no title.
     pub fn set_title(self, _title: impl Into<String>) -> Self {
         self
     }
@@ -20,27 +25,23 @@ impl FileDialog {
         self
     }
 
-    pub fn set_directory(self, _path: impl AsRef<Path>) -> Self {
+    pub fn add_filter(mut self, _name: impl Into<String>, extensions: &[impl ToString]) -> Self {
+        self.accept.extend(
+            extensions
+                .iter()
+                .map(|extension| format!(".{}", extension.to_string())),
+        );
         self
-    }
-
-    pub fn add_filter(self, _name: impl Into<String>, _extensions: &[impl ToString]) -> Self {
-        self
-    }
-
-    pub fn pick_file(self) -> Option<PathBuf> {
-        None
-    }
-
-    pub fn pick_files(self) -> Option<Vec<PathBuf>> {
-        None
-    }
-
-    pub fn pick_folder(self) -> Option<PathBuf> {
-        None
     }
 
     pub fn save_file(self) -> Option<PathBuf> {
         None
     }
+}
+
+/// Asks for one file, and runs `then` with the choice once it is in the page's files.
+pub fn pick_file_then(dialog: FileDialog, then: impl FnOnce(Option<PathBuf>) + 'static) {
+    crate::web::tasks::spawn(async move {
+        then(crate::web::picker::pick_file(&dialog.accept.join(",")).await);
+    });
 }

@@ -12247,7 +12247,8 @@ fn clipboard_image() -> Result<(usize, usize, Vec<u8>), String> {
 /// manager, if there is one.
 #[cfg(target_arch = "wasm32")]
 fn write_clipboard_image(_image: &crate::model::DecodedImage) -> Result<(), String> {
-    Err("copying a picture is not available in the browser yet".to_owned())
+    // The worker has copied it already, since a browser answers later.
+    Ok(())
 }
 
 #[cfg(not(target_arch = "wasm32"))]

@@ -21,12 +21,11 @@ impl Worker {
         let dir = self.dirs.media_cache_dir();
         let events = self.events.clone();
         let waker = self.waker.clone();
-        crate::platform::spawn_blocking(move || {
-            let Some(path) = crate::platform::FileDialog::new()
-                .set_title("Choose a group photo")
-                .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"])
-                .pick_file()
-            else {
+        let dialog = crate::platform::FileDialog::new()
+            .set_title("Choose a group photo")
+            .add_filter("Images", &["jpg", "jpeg", "png", "webp", "gif"]);
+        crate::platform::pick_file_then(dialog, move |path| {
+            let Some(path) = path else {
                 return;
             };
             let result = profile_picture_jpeg(&path).and_then(|jpeg| stage_picture(&dir, &jpeg));

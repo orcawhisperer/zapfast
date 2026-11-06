@@ -11,6 +11,7 @@ pub mod keys;
 pub mod notify;
 pub mod open;
 pub mod picker;
+pub mod pictures;
 pub mod player;
 pub mod recorder;
 pub mod rfd;

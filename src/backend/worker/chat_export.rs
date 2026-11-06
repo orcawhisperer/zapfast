@@ -72,6 +72,15 @@ impl Worker {
         include_media: bool,
     ) {
         self.stop_chat_export().await;
+        // An export reads the archive through a second connection, which the
+        // browser's storage does not offer.
+        if cfg!(target_arch = "wasm32") {
+            self.emit(Event::ChatExportFinished {
+                request,
+                result: Err("Exporting a chat is not available in the browser yet".into()),
+            });
+            return;
+        }
         let chat = self.canonical_str(&chat);
         if !self.chat_export.allowed
             || !self.privacy_ready

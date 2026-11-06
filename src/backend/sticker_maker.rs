@@ -8,6 +8,8 @@ use crate::model::StickerCrop;
 pub const SIDE: u32 = 512;
 /// WhatsApp rejects still stickers larger than this.
 const LIMIT: usize = 100 * 1024;
+/// The WebP qualities tried in turn, until one fits the limit.
+const QUALITIES: [f32; 5] = [85.0, 70.0, 55.0, 40.0, 25.0];
 
 /// A picture's size and whether it has any transparent pixel.
 pub fn inspect(bytes: &[u8]) -> Result<(u32, u32, bool), String> {
@@ -18,13 +20,8 @@ pub fn inspect(bytes: &[u8]) -> Result<(u32, u32, bool), String> {
     Ok((picture.width(), picture.height(), transparent))
 }
 
-/// Makes the sticker. Without `transparent`, see-through areas become white.
-pub fn make(
-    bytes: &[u8],
-    crop: StickerCrop,
-    transparent: bool,
-    emojis: &[String],
-) -> Result<Vec<u8>, String> {
+/// The sticker's picture. Without `transparent`, see-through areas become white.
+fn picture(bytes: &[u8], crop: StickerCrop, transparent: bool) -> Result<image::RgbaImage, String> {
     let picture = image::load_from_memory(bytes)
         .map_err(|error| format!("This picture could not be read: {error}"))?
         .to_rgba8();
@@ -43,20 +40,57 @@ pub fn make(
             pixel[3] = 255;
         }
     }
-    let webp = encode(&sticker)?;
+    Ok(sticker)
+}
+
+/// The encoded sticker with its metadata.
+fn labelled(webp: Vec<u8>, emojis: &[String]) -> Vec<u8> {
     let info = crate::sticker_meta::StickerInfo {
         pack_id: "zapfast".to_owned(),
         pack_name: "ZapFast".to_owned(),
         emojis: emojis.to_vec(),
         ..Default::default()
     };
-    Ok(crate::sticker_meta::write(&webp, &info).unwrap_or(webp))
+    crate::sticker_meta::write(&webp, &info).unwrap_or(webp)
+}
+
+/// Makes the sticker. Without `transparent`, see-through areas become white.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn make(
+    bytes: &[u8],
+    crop: StickerCrop,
+    transparent: bool,
+    emojis: &[String],
+) -> Result<Vec<u8>, String> {
+    let sticker = picture(bytes, crop, transparent)?;
+    Ok(labelled(encode(&sticker)?, emojis))
+}
+
+/// Makes the sticker. Without `transparent`, see-through areas become white.
+#[cfg(target_arch = "wasm32")]
+pub async fn make(
+    bytes: &[u8],
+    crop: StickerCrop,
+    transparent: bool,
+    emojis: &[String],
+) -> Result<Vec<u8>, String> {
+    let sticker = picture(bytes, crop, transparent)?;
+    let mut smallest = Vec::new();
+    for quality in QUALITIES {
+        let webp = crate::web::pictures::webp(&sticker, quality).await?;
+        if webp.len() <= LIMIT {
+            return Ok(labelled(webp, emojis));
+        }
+        smallest = webp;
+    }
+    Ok(labelled(smallest, emojis))
 }
 
 /// A lossy still WebP, lowering quality until it fits WhatsApp's limit.
+#[cfg(not(target_arch = "wasm32"))]
 fn encode(sticker: &image::RgbaImage) -> Result<Vec<u8>, String> {
     let mut smallest = Vec::new();
-    for quality in [85.0, 70.0, 55.0, 40.0, 25.0] {
+    for quality in QUALITIES {
         let webp = encode_at(sticker, quality)?;
         if webp.len() <= LIMIT {
             return Ok(webp);
@@ -67,11 +101,6 @@ fn encode(sticker: &image::RgbaImage) -> Result<Vec<u8>, String> {
 }
 
 /// One pass of libwebp's simple lossy encoder, which keeps the alpha channel.
-#[cfg(target_arch = "wasm32")]
-fn encode_at(_sticker: &image::RgbaImage, _quality: f32) -> Result<Vec<u8>, String> {
-    Err("Making stickers is not available in the browser yet".to_owned())
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn encode_at(sticker: &image::RgbaImage, quality: f32) -> Result<Vec<u8>, String> {
     let (width, height) = sticker.dimensions();

@@ -310,8 +310,9 @@ impl CustomImage {
 
 /// Reads an image for display, no larger than [`MAX_SIDE`].
 pub fn decode(path: &Path) -> Result<ColorImage, String> {
-    let decoded = image::ImageReader::open(path)
-        .and_then(image::ImageReader::with_guessed_format)
+    let bytes = crate::platform::sfs::read(path).map_err(|error| error.to_string())?;
+    let decoded = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
         .map_err(|error| error.to_string())?
         .decode()
         .map_err(|error| error.to_string())?;

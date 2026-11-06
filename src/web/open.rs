@@ -28,8 +28,8 @@ pub(crate) fn temporary_url(bytes: &[u8]) -> Result<String> {
     Ok(url)
 }
 
-/// Offers the page's file at `path` as a download.
-fn download(path: &Path) -> Result<()> {
+/// Offers the page's file at `path` as a download called `name`.
+fn download(path: &Path, name: &str) -> Result<()> {
     let bytes = crate::web::sfs::read(path)?;
     let document = web_sys::window()
         .and_then(|window| window.document())
@@ -41,13 +41,21 @@ fn download(path: &Path) -> Result<()> {
         .dyn_into()
         .map_err(|_| Error::other("the browser would not offer the file"))?;
     anchor.set_href(&url);
-    anchor.set_download(
-        &path
-            .file_name()
-            .map_or_else(|| "file".into(), |name| name.to_string_lossy()),
-    );
+    anchor.set_download(name);
     anchor.click();
     Ok(())
+}
+
+/// A file's own name, for offering it as a download.
+fn name_of(path: &Path) -> std::borrow::Cow<'_, str> {
+    path.file_name()
+        .map_or_else(|| "file".into(), |name| name.to_string_lossy())
+}
+
+/// Offers a stored file as a download called `name`, once it is back from storage.
+pub async fn offer(path: &Path, name: &str) -> Result<()> {
+    crate::web::sfs::ensure_loaded(path).await;
+    download(path, name)
 }
 
 pub fn that_detached(target: impl AsRef<OsStr>) -> Result<()> {
@@ -63,13 +71,12 @@ pub fn that_detached(target: impl AsRef<OsStr>) -> Result<()> {
     let path = Path::new(target);
     if crate::web::sfs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
         if crate::web::sfs::is_loaded(path) {
-            return download(path);
+            return download(path, &name_of(path));
         }
         // On its way from storage, and offered once it is here.
         let path = path.to_owned();
         wasm_bindgen_futures::spawn_local(async move {
-            crate::web::sfs::ensure_loaded(&path).await;
-            if download(&path).is_err() {
+            if offer(&path, &name_of(&path)).await.is_err() {
                 log::warn!("could not offer a stored file as a download");
             }
         });

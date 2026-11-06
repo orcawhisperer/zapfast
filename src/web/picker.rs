@@ -19,6 +19,9 @@ use crate::web::sfs;
 /// Where incoming files are kept. Under the cache, so they are never saved.
 const INCOMING: &str = "/zapfast/cache/incoming";
 
+/// The largest notification sound kept: about a minute of good MP3.
+const LARGEST_SOUND: usize = 8 * 1024 * 1024;
+
 /// The hidden input the picker opens from. Some browsers only open an attached one.
 const INPUT: &str = "zapfast-picker";
 
@@ -91,13 +94,13 @@ fn input() -> Option<HtmlInputElement> {
     Some(input)
 }
 
-/// Opens the browser's picker and returns what was chosen, once copied in.
-/// Nothing when it is cancelled. A browser opens it only soon after a click.
-pub async fn pick_files() -> Vec<PathBuf> {
-    let Some(input) = input() else {
-        return Vec::new();
-    };
-    input.set_multiple(true);
+/// Opens the browser's picker, for the extensions in `accept` or for anything when it
+/// is empty. Nothing is chosen when it is cancelled. A browser opens it only soon
+/// after a click.
+async fn ask(multiple: bool, accept: &str) -> Option<FileList> {
+    let input = input()?;
+    input.set_multiple(multiple);
+    input.set_accept(accept);
     // Choosing the same file again must still count as a change.
     input.set_value("");
     let (answer, answered) = oneshot::channel::<()>();
@@ -113,7 +116,35 @@ pub async fn pick_files() -> Vec<PathBuf> {
     let _ = answered.await;
     input.set_onchange(None);
     let _ = input.remove_event_listener_with_callback("cancel", settled.as_ref().unchecked_ref());
-    keep_files(input.files()).await
+    input.files()
+}
+
+/// Opens the browser's picker and returns what was chosen, once copied in.
+pub async fn pick_files() -> Vec<PathBuf> {
+    keep_files(ask(true, "").await).await
+}
+
+/// Asks for one file, among the extensions in `accept`, and returns it once copied in.
+pub async fn pick_file(accept: &str) -> Option<PathBuf> {
+    keep_files(ask(false, accept).await)
+        .await
+        .into_iter()
+        .next()
+}
+
+/// Keeps a picked notification sound among the files that outlive a reload, as the
+/// ones just picked do not. It is read back at every start, so it has to stay small.
+pub fn keep_sound(path: &Path, state: &Path) -> Result<PathBuf, String> {
+    let bytes = sfs::read(path).map_err(|error| error.to_string())?;
+    if bytes.len() > LARGEST_SOUND {
+        return Err("This file is too long for a notification sound".to_owned());
+    }
+    let folder = state.join("sounds");
+    sfs::create_dir_all(&folder).map_err(|error| error.to_string())?;
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    let kept = folder.join(safe_name(&name));
+    sfs::write(&kept, bytes).map_err(|error| error.to_string())?;
+    Ok(kept)
 }
 
 /// The files dropped or pasted since the last frame.

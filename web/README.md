@@ -46,6 +46,11 @@ Without one, the app asks for a key in its settings.
 - Recording voice messages. The microphone reaches the page through an audio worklet,
   and the browser's WebCodecs encoder makes the Opus, so a browser without it says so
   when the message is sent. The app asks for the microphone on the first recording.
+- Choosing a profile or group picture, a wallpaper, a notification sound, or a picture
+  or pack for stickers, through the browser's picker. Saving an attachment or an album
+  goes through the browser's download, so its settings say where. Making a sticker needs
+  a browser whose canvas encodes WebP.
+- Copying a picture to the clipboard, as a PNG.
 - Installing as an app, and starting without a network on the archive already held.
 - GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video
@@ -80,10 +85,7 @@ Without one, the app asks for a key in its settings.
 - **Background work.** The app shares the page's one thread, so decoding and a
   history sync hold up drawing.
 - **Exporting a chat, and setting aside an unreadable archive.** Both need a second
-  way into a database, which this storage does not offer.
-- **Other file dialogs:** a profile or group picture, a wallpaper, a sound, stickers,
-  and saving elsewhere still open nothing. Attachments have their picker.
-- **Copying a picture to the clipboard.** Pasting one works.
+  way into a database, which this storage does not offer. Export says so when asked.
 - **Cameras and calls.**
 
 ## What a browser cannot do
