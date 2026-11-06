@@ -1,0 +1,95 @@
+name: Browser version
+
+# The browser version, on its own branch. The release build takes more memory than the machine it
+# is written on has, and the shared code's tests get every platform here. The built page holds no
+# GIPHY key, as there is no .env in a checkout.
+on:
+  push:
+    branches: [wasm-browser]
+    paths-ignore:
+      - docs/**
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: release build and size
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang binaryen brotli
+          rustup target add wasm32-unknown-unknown
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Build
+        run: web/build.sh release
+      - name: Measure
+        run: |
+          wasm=dist/web/zapfast-web_bg.wasm
+          {
+            echo '| Module | Raw | gzip -9 | brotli -q 9 |'
+            echo '|---|---|---|---|'
+            row() { echo "| $1 | $(stat -c%s "$2") | $(gzip -9 -c "$2" | wc -c) | $(brotli -q 9 -c "$2" | wc -c) |"; }
+            row 'as built' "$wasm"
+            if wasm-opt -Oz --all-features "$wasm" -o "$RUNNER_TEMP/smaller.wasm"; then
+              row 'wasm-opt -Oz' "$RUNNER_TEMP/smaller.wasm"
+            else
+              echo '| wasm-opt -Oz | failed | | |'
+            fi
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zapfast-web
+          path: dist/web
+          retention-days: 7
+
+  browser-check:
+    name: browser build compiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+          rustup target add wasm32-unknown-unknown
+      - name: Check, with the sample chats
+        run: cargo check --locked --target wasm32-unknown-unknown --bin zapfast-web --features web-bin,demo
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: ${{ matrix.os == 'windows-latest' && 90 || 60 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: GUI build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev libpipewire-0.3-dev clang libclang-dev cmake perl
+      - name: Tests, with every feature
+        run: cargo test --locked --all-targets --all-features

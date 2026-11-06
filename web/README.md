@@ -55,8 +55,7 @@ Without one, the app asks for a key in its settings.
   through an `RTCPeerConnection` given a written SDP answer (`src/relay_answer.rs`), whose
   certificate fingerprint is a constant: if WhatsApp ever changes it, calls stop connecting
   here alone. The browser cancels the echo, and asks for the microphone when a call starts.
-  A peer's audio in plain Opus cannot be decoded, as that needs libopus. Not tried on a real
-  call yet.
+  A peer's audio in plain Opus cannot be decoded, as that needs libopus.
 - Installing as an app, and starting without a network on the archive already held.
 - GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video
