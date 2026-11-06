@@ -30,6 +30,9 @@ struct Store {
     kept: BTreeMap<PathBuf, u64>,
     /// Media in memory, oldest use first.
     held: Vec<PathBuf>,
+    /// When each file was last written, in milliseconds since 1970, where known.
+    /// Media keeps it across a reload, for what judges a file by its age.
+    written: BTreeMap<PathBuf, f64>,
 }
 
 /// How much media to hold in memory before letting the oldest go.
@@ -64,6 +67,7 @@ impl Store {
     fn forget(&mut self, path: &Path) {
         self.held.retain(|held| held != path);
         self.kept.remove(path);
+        self.written.remove(path);
     }
 }
 
@@ -103,8 +107,14 @@ fn key_of(path: &Path, folder: bool) -> String {
     key
 }
 
+/// Media is saved and may leave memory. What is never saved cannot leave, so it
+/// stays out of the budget that decides what does.
 fn is_media(path: &Path) -> bool {
-    SAVING.with_borrow(|saving| saving.database.is_some() && path.starts_with(&saving.media))
+    SAVING.with_borrow(|saving| {
+        saving.database.is_some()
+            && path.starts_with(&saving.media)
+            && !path.starts_with(&saving.unsaved)
+    })
 }
 
 /// Queues a change for IndexedDB and starts saving if nothing is.
@@ -143,23 +153,19 @@ async fn save_media(database: &web_sys::IdbDatabase, path: &Path, bytes: Rc<Vec<
         return;
     };
     let key = key_of(path, false);
+    // Its length, and when it was written once that is known.
+    let length = wasm_bindgen::JsValue::from_f64(bytes.len() as f64);
+    let index = match with(|store| store.written.get(path).copied()) {
+        Some(written) => js_sys::Array::of2(&length, &written.into()).into(),
+        None => length,
+    };
     let saved = idb::apply(
         database,
         idb::MEDIA,
         vec![Stored::Put(key.clone(), idb::value_of(&sealed))],
     )
     .await
-    .and(
-        idb::apply(
-            database,
-            idb::MEDIA_INDEX,
-            vec![Stored::Put(
-                key,
-                wasm_bindgen::JsValue::from_f64(bytes.len() as f64),
-            )],
-        )
-        .await,
-    );
+    .and(idb::apply(database, idb::MEDIA_INDEX, vec![Stored::Put(key, index)]).await);
     match saved {
         // Now it can leave memory, and be found again after a reload.
         Ok(()) if current() => with(|store| {
@@ -229,6 +235,7 @@ pub async fn hydrate(
     unsaved: PathBuf,
 ) -> Result<()> {
     use crate::web::idb;
+    use wasm_bindgen::JsCast as _;
     let stored = idb::all(&database, idb::FILES)
         .await
         .map_err(Error::other)?;
@@ -247,10 +254,17 @@ pub async fn hydrate(
                 }
             }
         }
-        for (key, length) in index {
-            store
-                .kept
-                .insert(PathBuf::from(key), length.as_f64().unwrap_or(0.0) as u64);
+        for (key, value) in index {
+            // Older entries hold the length alone.
+            let (length, written) = match value.dyn_ref::<js_sys::Array>() {
+                Some(pair) => (pair.get(0).as_f64(), pair.get(1).as_f64()),
+                None => (value.as_f64(), None),
+            };
+            let path = PathBuf::from(key);
+            if let Some(written) = written {
+                store.written.insert(path.clone(), written);
+            }
+            store.kept.insert(path, length.unwrap_or(0.0) as u64);
         }
     });
     SAVING.with_borrow_mut(|saving| {
@@ -411,6 +425,7 @@ fn put(path: &Path, bytes: Vec<u8>) -> Result<()> {
         }
         let bytes = Rc::new(bytes);
         store.files.insert(path.to_owned(), bytes.clone());
+        store.written.insert(path.to_owned(), js_sys::Date::now());
         // Held until saved, under what the store knows of it.
         if is_media(path) {
             store.kept.remove(path);
@@ -515,8 +530,12 @@ pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
             return Err(not_here_yet(&from));
         }
         if let Some(bytes) = store.files.remove(&from) {
+            let written = store.written.get(&from).copied();
             store.forget(&from);
             store.files.insert(to.clone(), bytes.clone());
+            if let Some(written) = written {
+                store.written.insert(to.clone(), written);
+            }
             save(Change::Gone(from));
             save(Change::File(to, bytes));
             return Ok(());
@@ -525,9 +544,26 @@ pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
             return Err(missing());
         }
         let (files, folders) = store.beneath(&from);
+        // As for one file: what is only in storage moves once it is here, or it
+        // would be deleted without arriving.
+        let waiting: Vec<&PathBuf> = files
+            .iter()
+            .filter(|file| store.kept.contains_key(*file) && !store.files.contains_key(*file))
+            .collect();
+        if let Some((first, rest)) = waiting.split_first() {
+            for file in rest {
+                request_load(file);
+            }
+            return Err(not_here_yet(first));
+        }
         for file in files {
             if let (Some(bytes), Ok(rest)) = (store.files.remove(&file), file.strip_prefix(&from)) {
+                let written = store.written.get(&file).copied();
+                store.forget(&file);
                 store.files.insert(to.join(rest), bytes.clone());
+                if let Some(written) = written {
+                    store.written.insert(to.join(rest), written);
+                }
                 save(Change::File(to.join(rest), bytes));
             }
             save(Change::Gone(file));
@@ -595,6 +631,8 @@ impl FileType {
 pub struct Metadata {
     length: u64,
     folder: bool,
+    /// When it was written, in milliseconds since 1970, where known.
+    written: Option<f64>,
 }
 
 impl Metadata {
@@ -624,9 +662,14 @@ impl Metadata {
         }
     }
 
-    /// No clock is kept for files, so anything that compares ages sees none.
+    /// When the file was written, read off the browser's clock at the time. A
+    /// file read back after a reload knows it only if it is media. std's own
+    /// clock does not run in a page, so its age is not `elapsed()`: measure it
+    /// against `crate::platform::SystemTime`.
     pub fn modified(&self) -> Result<std::time::SystemTime> {
-        Err(Error::new(ErrorKind::Unsupported, "no file times here"))
+        self.written
+            .map(|written| std::time::UNIX_EPOCH + std::time::Duration::from_millis(written as u64))
+            .ok_or_else(|| Error::new(ErrorKind::Unsupported, "no time is known for this file"))
     }
 
     pub fn permissions(&self) -> Permissions {
@@ -641,6 +684,7 @@ pub fn metadata(path: impl AsRef<Path>) -> Result<Metadata> {
         return Ok(Metadata {
             length: 1,
             folder: false,
+            written: None,
         });
     }
     with(|store| {
@@ -648,6 +692,7 @@ pub fn metadata(path: impl AsRef<Path>) -> Result<Metadata> {
             return Ok(Metadata {
                 length: 0,
                 folder: true,
+                written: None,
             });
         }
         store
@@ -658,6 +703,7 @@ pub fn metadata(path: impl AsRef<Path>) -> Result<Metadata> {
             .map(|length| Metadata {
                 length,
                 folder: false,
+                written: store.written.get(&path).copied(),
             })
             .ok_or_else(missing)
     })
@@ -858,6 +904,7 @@ impl File {
         Ok(Metadata {
             length: self.data.get_ref().len() as u64,
             folder: false,
+            written: with(|store| store.written.get(&self.path).copied()),
         })
     }
 

@@ -111,6 +111,7 @@ const ATTACHMENT_LIMIT_ERROR: &str =
 /// The deadline of a download of unknown or small size.
 const ATTACHMENT_TIMEOUT: Duration = Duration::from_secs(120);
 /// A GIPHY request or GIF thumbnail download must finish within this time.
+#[cfg(not(target_arch = "wasm32"))]
 const GIF_TIMEOUT: Duration = Duration::from_secs(30);
 /// The slowest transfer the deadline allows for beyond that: 128 KiB/s, so a
 /// 2 GiB video still has over four hours.
@@ -761,10 +762,10 @@ async fn played_receipt_allowed(
     }
 }
 
-/// A sticker file's size and modification time, with the emojis read from it.
 /// How many failed lookups a profile picture gets before it stops being asked for.
 const AVATAR_ATTEMPTS: u32 = 3;
 
+/// A sticker file's size and modification time, with the emojis read from it.
 type EmojiStamp = ((u64, Option<std::time::SystemTime>), Vec<String>);
 
 /// Downloadable recent sticker from the phone.
@@ -4730,6 +4731,7 @@ impl Worker {
         self.forward_queue = None;
         self.pending_older.clear();
         self.pending_avatars.clear();
+        self.avatar_failures.clear();
         // A star request belongs to the account that just left. A task that
         // finishes after logout must not write the next account, whose
         // generations start over.
@@ -10883,7 +10885,13 @@ impl Worker {
             && metadata
                 .modified()
                 .ok()
-                .and_then(|modified| modified.elapsed().ok())
+                // Not `elapsed()`, whose clock panics in a page.
+                .and_then(|modified| {
+                    crate::platform::SystemTime::now()
+                        .duration_since(crate::platform::UNIX_EPOCH)
+                        .ok()?
+                        .checked_sub(modified.duration_since(std::time::UNIX_EPOCH).ok()?)
+                })
                 .is_some_and(|age| age < AVATAR_FRESH)
         {
             let path = (metadata.len() > 0).then_some(path);
@@ -11002,10 +11010,13 @@ impl Worker {
     fn retry_due_avatars(&mut self) {
         let due: Vec<(String, bool)> = self.pending_avatars.keys().cloned().collect();
         for (id, full) in due {
+            let key = (id.clone(), full);
+            // A lookup parked while the link was down keeps the failures it had.
             let attempts = self
                 .pending_avatars
-                .remove(&(id.clone(), full))
-                .unwrap_or(0);
+                .remove(&key)
+                .unwrap_or(0)
+                .max(self.avatar_failures.get(&key).copied().unwrap_or(0));
             if attempts >= AVATAR_ATTEMPTS {
                 self.avatar_failures.remove(&(id.clone(), full));
                 let path = last_avatar(&self.avatar_file(&id, full));
@@ -11678,6 +11689,7 @@ impl Worker {
                 }
                 match outcome {
                     Ok((mut row, raw)) => {
+                        crate::platform::release_incoming(&path);
                         // Stamped now, after the one before it, so it sorts after it.
                         row.timestamp = crate::util::now();
                         let _ = commands.send(Command::Outbound {
@@ -12533,6 +12545,7 @@ fn media_path(dir: &Path, chat: &str, id: &str, mime: &str, file_name: Option<&s
 
 /// Reserve each destination atomically, including when another save is racing
 /// us. Checking existence before fs::copy could still overwrite a user's file.
+#[cfg(not(target_arch = "wasm32"))]
 fn save_album_copy(source: &Path, folder: &Path, name: &str) -> std::io::Result<PathBuf> {
     use std::io::ErrorKind;
     let name = Path::new(name)
@@ -13631,7 +13644,6 @@ async fn upload_media_counted(
         .map_err(|error| error.to_string())
 }
 
-/// Uploads a recording and builds a push-to-talk message with waveform.
 /// Files a made sticker under its content's name.
 fn store_made_sticker(dir: &Path, sticker: Vec<u8>) -> Result<PathBuf, String> {
     crate::platform::sfs::create_dir_all(dir).map_err(|error| error.to_string())?;
@@ -13660,7 +13672,8 @@ fn kept_sound(path: PathBuf, _state: &Path) -> Result<PathBuf, String> {
     Ok(path)
 }
 
-/// Where a picked notification sound stays. The desktop plays it from where it is.
+/// Where a picked notification sound stays. A page copies it among the files
+/// that outlive a reload, as a picked file lasts only as long as the page.
 #[cfg(target_arch = "wasm32")]
 fn kept_sound(path: PathBuf, state: &Path) -> Result<PathBuf, String> {
     crate::web::picker::keep_sound(&path, state)
@@ -13695,6 +13708,7 @@ async fn encode_take(mut samples: Vec<f32>) -> Result<(Vec<u8>, u32, Vec<u8>), S
     Ok((bytes, seconds, waveform))
 }
 
+/// Uploads a recording and builds a push-to-talk message with waveform.
 async fn prepare_voice(
     client: &Client,
     bytes: Vec<u8>,

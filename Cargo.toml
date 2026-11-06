@@ -258,7 +258,8 @@ web-time = "1"
 # Its clock asks the browser here.
 jiff = { version = "0.2", features = ["js"] }
 # Parses addresses here too, and asks the browser's fetch for what it fetches.
-reqwest = { version = "0.12", default-features = false }
+# `stream` reads a link preview's page as it arrives, to stop at its limit.
+reqwest = { version = "0.12", default-features = false, features = ["stream"] }
 # Stand-ins for crates that cannot build here. Each answers only what ZapFast asks
 # of it, and lib.rs names it as the crate it replaces; see web/shims/.
 web-shim-fastframe-emoji = { path = "web/shims/fastframe-emoji" }

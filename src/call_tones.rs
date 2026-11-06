@@ -17,10 +17,13 @@
 //! clicks. Tests and demos never open a device: [`Tones`] only keeps track of what would play.
 
 use std::f32::consts::TAU;
+#[cfg(not(target_arch = "wasm32"))]
 use std::num::NonZero;
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::Source as _;
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::buffer::SamplesBuffer;
 
 /// The rate the tones are rendered at.
@@ -42,12 +45,16 @@ const RINGTONE_LEVEL: f32 = 0.28;
 /// The fade at either end of a tone, which keeps it from clicking.
 const EDGE: f32 = 0.02;
 /// How long a stopped tone takes to fade out.
+#[cfg(not(target_arch = "wasm32"))]
 const FADE_OUT: Duration = Duration::from_millis(60);
 /// How often a playing tone looks at its output's health.
+#[cfg(not(target_arch = "wasm32"))]
 const WATCH: Duration = Duration::from_millis(100);
 /// How long a tone whose output failed waits before opening it again,
 /// doubling up to the longest with each failure.
+#[cfg(not(target_arch = "wasm32"))]
 const RETRY: Duration = Duration::from_secs(1);
+#[cfg(not(target_arch = "wasm32"))]
 const RETRY_LONGEST: Duration = Duration::from_secs(30);
 
 /// A tone a call plays.
@@ -108,12 +115,15 @@ impl Tones {
 
 /// A tone looping in the browser's own audio element; dropping it stops the tone.
 #[cfg(target_arch = "wasm32")]
-struct Playing(crate::web::player::Looping);
+struct Playing {
+    _looping: crate::web::player::Looping,
+}
 
 #[cfg(target_arch = "wasm32")]
 impl Playing {
     fn start(tone: Tone) -> Option<Self> {
-        crate::web::player::Looping::start(&cycle(tone), RATE).map(Self)
+        crate::web::player::Looping::start(&cycle(tone), RATE)
+            .map(|looping| Self { _looping: looping })
     }
 }
 
@@ -184,6 +194,7 @@ impl Playing {
 
 /// Waits until the tone's handle is dropped, which returns true, or until
 /// `failed`, looked at every `every`, which returns false.
+#[cfg(not(target_arch = "wasm32"))]
 fn wait_for_stop(
     stopped: &std::sync::mpsc::Receiver<()>,
     failed: impl Fn() -> bool,

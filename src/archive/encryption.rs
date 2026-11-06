@@ -148,14 +148,21 @@ fn copy_archive_key_in(
 /// Deletes the keyring entry of an archive folder that is gone for good,
 /// such as a removed account's. Never call it while the archive exists.
 pub fn forget_archive_key(identity: &str) -> Result<()> {
+    // A page keeps its keys itself, and has no OS keyring to ask.
     #[cfg(target_arch = "wasm32")]
-    crate::web::keys::forget(identity);
-    let entry = platform_store()?
-        .build("rocks.zapfast.ZapFast", identity, None)
-        .map_err(keyring_error)?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
-        Err(error) => Err(keyring_error(error)),
+    {
+        crate::web::keys::forget(identity);
+        Ok(())
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let entry = platform_store()?
+            .build("rocks.zapfast.ZapFast", identity, None)
+            .map_err(keyring_error)?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
+            Err(error) => Err(keyring_error(error)),
+        }
     }
 }
 
@@ -193,6 +200,7 @@ fn platform_store() -> Result<std::sync::Arc<dyn CredentialStoreApi>> {
         as std::sync::Arc<dyn CredentialStoreApi>)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn key_from_entry(path: &Path, entry: &keyring_core::Entry) -> Result<Zeroizing<[u8; 32]>> {
     match entry.get_secret() {
         Ok(secret) => {
@@ -248,6 +256,7 @@ fn keyring_error(error: keyring_core::Error) -> anyhow::Error {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn create_key(entry: &keyring_core::Entry) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0; 32]);
     getrandom::fill(key.as_mut()).context("Could not generate an archive key")?;
@@ -326,6 +335,7 @@ fn unlock(connection: Connection, key: &[u8; 32]) -> Result<Connection> {
     Ok(connection)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn private_file(path: &Path) -> Result<()> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);

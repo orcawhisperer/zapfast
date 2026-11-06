@@ -71,6 +71,7 @@ pub fn twelve_hour_clock() -> bool {
 
 /// Whether a time pattern uses a 12-hour hour field. Windows patterns spell
 /// it `h`, ICU patterns `h` or `K`, and C formats `%I`, `%l`, or `%r`.
+#[cfg(not(target_arch = "wasm32"))]
 fn pattern_is_twelve_hour(pattern: &str) -> bool {
     if pattern.contains('%') {
         return ["%I", "%l", "%r", "%p"]

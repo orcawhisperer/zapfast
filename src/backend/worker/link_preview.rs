@@ -8,11 +8,13 @@ use std::time::Duration;
 
 use crate::model::{ComposedPreview, LinkPreview};
 
+#[cfg(not(target_arch = "wasm32"))]
 const USER_AGENT: &str = concat!("ZapFast/", env!("CARGO_PKG_VERSION"));
 /// Page and picture together.
 const TOTAL_TIME: Duration = Duration::from_secs(5);
 const MAX_PAGE: usize = 512 * 1024;
 const MAX_IMAGE: usize = 2 * 1024 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_REDIRECTS: usize = 5;
 const THUMB_SIDE: u32 = 300;
 const MIN_SIDE: u32 = 16;
@@ -414,9 +416,19 @@ impl reqwest::dns::Resolve for GuardedResolver {
 /// The body up to `limit` bytes, and whether more followed.
 #[cfg(target_arch = "wasm32")]
 async fn read_body(response: reqwest::Response, limit: usize) -> Option<(Vec<u8>, bool)> {
-    let body = response.bytes().await.ok()?.to_vec();
-    let more = body.len() > limit;
-    Some((body.into_iter().take(limit).collect(), more))
+    use futures::StreamExt as _;
+    // Read as it arrives, as the desktop does: stopping drops the stream, which
+    // aborts the browser's fetch.
+    let mut chunks = response.bytes_stream();
+    let mut body = Vec::new();
+    while let Some(chunk) = chunks.next().await {
+        body.extend_from_slice(&chunk.ok()?);
+        if body.len() > limit {
+            body.truncate(limit);
+            return Some((body, true));
+        }
+    }
+    Some((body, false))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -434,6 +446,7 @@ async fn read_body(mut response: reqwest::Response, limit: usize) -> Option<(Vec
 
 /// Makes SOCKS proxies resolve the target name themselves, so it is never
 /// looked up on this computer. Credentials and other schemes are unchanged.
+#[cfg(not(target_arch = "wasm32"))]
 fn proxy_url_for_preview(url: &str) -> String {
     if let Some(rest) = url.strip_prefix("socks5://") {
         format!("socks5h://{rest}")

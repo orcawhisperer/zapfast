@@ -63,6 +63,8 @@ pub mod platform;
 pub mod privacy;
 pub mod proxy;
 pub mod qr;
+// Only a page reaches a call's relay through an answer; tested on every platform.
+#[cfg(any(test, target_arch = "wasm32"))]
 pub mod relay_answer;
 pub mod safety;
 pub mod settings;

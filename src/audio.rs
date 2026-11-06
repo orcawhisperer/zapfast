@@ -2,27 +2,39 @@
 //!
 //! Input and output devices are opened on demand and released when idle.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::platform::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
+#[cfg(not(target_arch = "wasm32"))]
 use std::num::NonZero;
 use std::path::{Path, PathBuf};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::Source;
+#[cfg(not(target_arch = "wasm32"))]
 use rodio::buffer::SamplesBuffer;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::backend::Waker;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::voice;
 
 /// Maximum recording length. The phone uses a shorter limit.
+#[cfg(not(target_arch = "wasm32"))]
 const LONGEST_RECORDING: Duration = Duration::from_secs(15 * 60);
 
+#[cfg(not(target_arch = "wasm32"))]
 fn mono() -> NonZero<u16> {
     NonZero::<u16>::MIN
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn rate() -> NonZero<u32> {
     NonZero::new(voice::RATE).expect("48 kHz is not zero")
 }
@@ -34,6 +46,7 @@ mod output;
 const CALL_STREAM: &str = "Call";
 
 pub use microphone::{Microphone, microphones};
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use output::{MixOutput, Monitor};
 pub use output::{Output, open_output};
 
@@ -54,6 +67,7 @@ pub struct Status {
 }
 
 impl Status {
+    #[cfg(not(target_arch = "wasm32"))]
     const IDLE: Self = Self {
         state: State::Idle,
         position: Duration::ZERO,
@@ -100,6 +114,7 @@ pub fn speed_label(speed: f32) -> String {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type Decoded = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
 
 #[cfg(target_arch = "wasm32")]
@@ -128,6 +143,7 @@ pub struct Player {
     finished: Option<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Loaded {
     message: String,
     samples: Arc<Vec<f32>>,
@@ -141,6 +157,7 @@ struct Loaded {
     done: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Stretching {
     factor: f32,
     slot: StretchedSlot,
@@ -149,14 +166,17 @@ struct Stretching {
     cancelled: Arc<AtomicBool>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for Stretching {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Relaxed);
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 type StretchedSlot = Arc<Mutex<Option<Arc<Vec<f32>>>>>;
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Decoding {
     message: String,
     /// Requested start position after decoding, from 0 to 1.
@@ -600,9 +620,11 @@ impl Player {
 
 /// How soon after a failed output another failure pauses playback rather
 /// than reopening the device.
+#[cfg(not(target_arch = "wasm32"))]
 const OUTPUT_RETRY: Duration = Duration::from_secs(10);
 
 /// Where `position` falls in a clip of `samples`, from 0 to 1.
+#[cfg(not(target_arch = "wasm32"))]
 fn fraction_of(position: Duration, samples: usize) -> f32 {
     let total = clip_length(samples);
     if total.is_zero() {
@@ -611,12 +633,14 @@ fn fraction_of(position: Duration, samples: usize) -> f32 {
     (position.as_secs_f64() / total.as_secs_f64()).clamp(0.0, 1.0) as f32
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn clip_length(samples: usize) -> Duration {
     Duration::from_secs_f64(samples as f64 / f64::from(voice::RATE))
 }
 
 /// Decodes a file to mono 48 kHz samples. OGG/Opus uses `voice`; other
 /// supported formats use rodio.
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_file(path: &Path) -> Result<Vec<f32>, String> {
     let bytes = crate::platform::sfs::read(path)
         .map_err(|error| format!("Could not read the audio: {error}"))?;

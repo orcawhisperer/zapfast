@@ -1750,6 +1750,10 @@ pub struct Backend {
     commands: mpsc::UnboundedSender<Command>,
     events: std::sync::mpsc::Receiver<Event>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// A page's worker, on the window's own thread: it ends only after a turn of
+    /// the window's has returned, so nothing can join it there.
+    #[cfg(target_arch = "wasm32")]
+    task: Option<crate::platform::JoinHandle<()>>,
     offline: bool,
     #[cfg(any(test, feature = "demo"))]
     demo_commands: Option<std::sync::Mutex<Vec<Command>>>,
@@ -1767,13 +1771,13 @@ impl Backend {
         let (startup, started) = tokio::sync::oneshot::channel();
         // A page has one thread, so the worker shares it with the window.
         #[cfg(target_arch = "wasm32")]
-        let thread = {
-            crate::platform::spawn(async move {
+        let (thread, task) = {
+            let task = crate::platform::spawn(async move {
                 if started.await.is_ok() {
                     worker::run(dirs, event_tx, worker_commands, command_rx, waker).await;
                 }
             });
-            None
+            (None, Some(task))
         };
         #[cfg(not(target_arch = "wasm32"))]
         let thread = {
@@ -1804,6 +1808,8 @@ impl Backend {
             commands: command_tx,
             events: event_rx,
             thread,
+            #[cfg(target_arch = "wasm32")]
+            task,
             offline: false,
             #[cfg(any(test, feature = "demo"))]
             demo_commands: None,
@@ -1824,6 +1830,8 @@ impl Backend {
                 commands: command_tx,
                 events: event_rx,
                 thread: None,
+                #[cfg(target_arch = "wasm32")]
+                task: None,
                 offline: true,
                 #[cfg(any(test, feature = "demo"))]
                 demo_commands: None,
@@ -1960,6 +1968,18 @@ impl Backend {
         self.send(Command::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+    }
+
+    /// Waits for a page's worker to end after [`Self::shutdown`], which could not
+    /// wait for it. The desktop's shutdown has already joined its thread.
+    #[cfg(target_arch = "wasm32")]
+    pub fn stopped(&mut self) -> impl std::future::Future<Output = ()> + 'static {
+        let task = self.task.take();
+        async move {
+            if let Some(task) = task {
+                let _ = task.await;
+            }
         }
     }
 }

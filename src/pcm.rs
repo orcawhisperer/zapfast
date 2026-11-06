@@ -11,6 +11,8 @@ pub struct Framer {
     covered: f64,
     sum: f32,
     count: u32,
+    /// The last sample out, which going up repeats until another comes in.
+    last: f32,
     frame: Vec<i16>,
     size: usize,
 }
@@ -22,6 +24,7 @@ impl Framer {
             covered: 0.0,
             sum: 0.0,
             count: 0,
+            last: 0.0,
             frame: Vec::with_capacity(size),
             size,
         }
@@ -35,10 +38,14 @@ impl Framer {
             self.covered += 1.0;
             while self.covered >= self.step {
                 self.covered -= self.step;
-                let mean = self.sum / self.count.max(1) as f32;
-                self.sum = 0.0;
-                self.count = 0;
-                self.frame.push(to_i16(mean));
+                // Going up, one sample in makes several out, and only the first has
+                // anything new to average.
+                if self.count > 0 {
+                    self.last = self.sum / self.count as f32;
+                    self.sum = 0.0;
+                    self.count = 0;
+                }
+                self.frame.push(to_i16(self.last));
                 if self.frame.len() == self.size {
                     emit(std::mem::replace(
                         &mut self.frame,
@@ -153,6 +160,16 @@ mod tests {
             assert_eq!(out.len(), 16, "{rate}: 16,000 samples is 16 frames of 960");
             assert!(out.iter().all(|frame| frame.len() == 960));
         }
+    }
+
+    /// A device slower than the call, such as a headset at 8 kHz, is brought up
+    /// without gaps between its samples.
+    #[test]
+    fn going_up_repeats_each_sample_rather_than_leaving_silence() {
+        let out = frames(8_000, 16_000, 960, &[vec![0.25f32; 480]]);
+        assert_eq!(out.len(), 1, "480 samples at 8 kHz are one frame of 960");
+        let level = (0.25 * f32::from(i16::MAX)) as i16;
+        assert!(out[0].iter().all(|&sample| sample == level));
     }
 
     #[test]

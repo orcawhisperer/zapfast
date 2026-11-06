@@ -186,6 +186,28 @@ mod tests {
         );
     }
 
+    /// Retries while the link is down park a picture with no count of its own,
+    /// which must not start its failures over.
+    #[tokio::test]
+    async fn a_picture_parked_while_offline_keeps_its_failures() {
+        let (mut worker, _, _, _) = super::super::receipt_tests::worker();
+        let person = "491700000000@s.whatsapp.net".to_owned();
+        let key = (person.clone(), false);
+        for _ in 0..2 {
+            worker.avatar_failed(person.clone(), false);
+            worker.retry_due_avatars();
+        }
+        assert_eq!(worker.pending_avatars.get(&key), Some(&0));
+        worker.retry_due_avatars();
+        assert_eq!(worker.avatar_failures.get(&key), Some(&2));
+        worker.avatar_failed(person.clone(), false);
+        worker.retry_due_avatars();
+        assert!(
+            !worker.pending_avatars.contains_key(&key),
+            "the third failure is still the last"
+        );
+    }
+
     #[tokio::test]
     async fn a_picture_waits_for_the_connection_and_the_channel_list() {
         let (mut worker, events, _, _) = super::super::receipt_tests::worker();

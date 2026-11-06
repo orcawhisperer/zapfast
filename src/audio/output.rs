@@ -162,6 +162,7 @@ impl MixOutput {
     }
 
     /// The stream's rate and channel count, which the mixer mixes at.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn format(&self) -> (u32, u16) {
         (self.output.sample_rate(), self.output.channels())
     }
@@ -171,6 +172,7 @@ impl MixOutput {
     }
 
     /// How far the output has played, and its latency as the device reports it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn clock(&self) -> fastframe_audio::Clock {
         self.output.clock()
     }

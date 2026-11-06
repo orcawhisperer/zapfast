@@ -4,10 +4,14 @@
 //! Its new migration drops an unused column that 0.14 still writes. Retain that
 //! column after migration, without reading or rewriting any stored secrets.
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::platform::FilePath as _;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+#[cfg(not(target_arch = "wasm32"))]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(not(target_arch = "wasm32"))]
 use rusqlite::{Connection, OpenFlags};
 use whatsapp_rust::store::SqliteStore;
 

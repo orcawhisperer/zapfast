@@ -50,26 +50,14 @@ fn wants_demo() -> bool {
 fn give_samples_a_voice(app: &mut App) {
     const RATE: u32 = 16_000;
     const SECONDS: u32 = 4;
-    let samples = (0..RATE * SECONDS).map(|index| {
-        let at = f64::from(index) / f64::from(RATE);
-        let fade = (at * std::f64::consts::PI / f64::from(SECONDS)).sin();
-        ((at * 330.0 * std::f64::consts::TAU).sin() * fade * 12_000.0) as i16
-    });
-    let data_size = RATE * SECONDS * 2;
-    let mut wav = Vec::with_capacity(44 + data_size as usize);
-    wav.extend_from_slice(b"RIFF");
-    wav.extend_from_slice(&(36 + data_size).to_le_bytes());
-    wav.extend_from_slice(b"WAVEfmt ");
-    wav.extend_from_slice(&16u32.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&1u16.to_le_bytes());
-    wav.extend_from_slice(&RATE.to_le_bytes());
-    wav.extend_from_slice(&(RATE * 2).to_le_bytes());
-    wav.extend_from_slice(&2u16.to_le_bytes());
-    wav.extend_from_slice(&16u16.to_le_bytes());
-    wav.extend_from_slice(b"data");
-    wav.extend_from_slice(&data_size.to_le_bytes());
-    wav.extend(samples.flat_map(i16::to_le_bytes));
+    let samples: Vec<f32> = (0..RATE * SECONDS)
+        .map(|index| {
+            let at = f64::from(index) / f64::from(RATE);
+            let fade = (at * std::f64::consts::PI / f64::from(SECONDS)).sin();
+            ((at * 330.0 * std::f64::consts::TAU).sin() * fade * 12_000.0 / 32_767.0) as f32
+        })
+        .collect();
+    let wav = crate::pcm::wav(&samples, RATE);
     let voice = app.dirs.media_cache_dir().join("sample-voice.wav");
     let film = app.dirs.media_cache_dir().join("sample-film.mp4");
     let note = app.dirs.media_cache_dir().join("sample-note.mp4");

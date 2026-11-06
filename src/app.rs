@@ -2125,20 +2125,21 @@ impl App {
         let removed = self.accounts[index].id.clone();
         self.forget_call_of(&removed);
         let dirs = self.accounts[index].dirs.clone();
-        // The key outlives the archive only by mistake: forget it once the
-        // archive is gone, never before.
-        let key = crate::archive::archive_key_identity(&dirs.archive_db()).ok();
-        let state_error = crate::platform::sfs::remove_dir_all(&dirs.state).err();
-        let cache_error = crate::platform::sfs::remove_dir_all(&dirs.cache)
-            .err()
-            .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
-        if let Some(identity) = key
-            && !dirs.archive_db().found()
-            && cfg!(not(test))
-            && let Err(error) = crate::archive::forget_archive_key(&identity)
-        {
-            log::warn!("could not delete a removed account's archive key: {error:#}");
-        }
+        // A page's worker shares this thread, so it stops only once this has
+        // returned: its databases are still open until then.
+        #[cfg(target_arch = "wasm32")]
+        let files_error: Option<std::io::Error> = {
+            let stopped = self.accounts[index].backend.stopped();
+            crate::platform::spawn(async move {
+                stopped.await;
+                if let Some(error) = delete_account_files(&dirs) {
+                    log::warn!("could not delete the removed account's files: {error}");
+                }
+            });
+            None
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let files_error = delete_account_files(&dirs);
         self.accounts.remove(index);
         if index < self.active {
             self.active -= 1;
@@ -2154,7 +2155,7 @@ impl App {
         }
         self.save_roster();
         self.report_presence();
-        if let Some(error) = state_error.or(cache_error) {
+        if let Some(error) = files_error {
             let message =
                 crate::i18n::gettext(self.locale, "Could not delete the removed account's files");
             self.toast_error(format!("{message}: {error}"));
@@ -2646,13 +2647,13 @@ impl App {
         };
     }
 
-    /// Initializes a newly created window.
     /// Connects a demo's own waker to its window, which the shell does elsewhere.
     #[cfg(all(feature = "demo", target_arch = "wasm32"))]
     pub(crate) fn attach_waker(&self, ctx: &egui::Context) {
         self.waker.attach(ctx);
     }
 
+    /// Initializes a newly created window.
     pub fn attach(&mut self, ctx: &egui::Context) {
         // Texture handles belong to the window's egui context. Keep the
         // underlying pictures and recreate handles for the new window.
@@ -5172,7 +5173,11 @@ impl App {
                 self.toast_error("This device was unlinked from your phone");
                 return;
             }
-            LinkStatus::Failed(message) => self.toast_error(message.clone()),
+            LinkStatus::Failed(message) => {
+                // An archive that would not open sends no chats, so none are loading.
+                self.chats_loading = false;
+                self.toast_error(message.clone());
+            }
             _ => {}
         }
         self.link = status;
@@ -9631,7 +9636,7 @@ impl App {
             Action::ReloadThemes => self.load_custom_themes(),
             Action::OpenThemesFolder => {
                 let directory = self.dirs.config.join("themes");
-                std::thread::spawn(move || {
+                let _ = crate::platform::run_detached("themes-folder", move || {
                     if crate::platform::sfs::create_dir_all(&directory).is_ok() {
                         let _ = crate::platform::open::that(directory);
                     }
@@ -11644,8 +11649,9 @@ impl App {
             let hovering = !input.raw.hovered_files.is_empty();
             (dropped, hovering)
         });
+        // A page's dropped paths are bare names: its files came in above.
         #[cfg(target_arch = "wasm32")]
-        let dropped = dropped_here;
+        let (_, dropped) = (dropped, dropped_here);
         self.dropping = hovering && self.open_chat.is_some();
         let frame = ctx.cumulative_frame_nr();
         let drop_id = egui::Id::new("dropped-files-input-frame");
@@ -12150,6 +12156,25 @@ mod native_clipboard_tests {
         assert!(matches!(contents, ClipboardPaste::Files(paths) if paths == [path]));
         assert!(native_clipboard_files(b"\xff").is_err());
     }
+}
+
+/// Deletes a removed account's folders once its backend has stopped. The key
+/// outlives the archive only by mistake: it is forgotten once the archive is
+/// gone, never before. Returns why the folders could not all go.
+fn delete_account_files(dirs: &crate::paths::AccountDirs) -> Option<std::io::Error> {
+    let key = crate::archive::archive_key_identity(&dirs.archive_db()).ok();
+    let state_error = crate::platform::sfs::remove_dir_all(&dirs.state).err();
+    let cache_error = crate::platform::sfs::remove_dir_all(&dirs.cache)
+        .err()
+        .filter(|error| error.kind() != std::io::ErrorKind::NotFound);
+    if let Some(identity) = key
+        && !dirs.archive_db().found()
+        && cfg!(not(test))
+        && let Err(error) = crate::archive::forget_archive_key(&identity)
+    {
+        log::warn!("could not delete a removed account's archive key: {error:#}");
+    }
+    state_error.or(cache_error)
 }
 
 /// Prefers the clipboard's file list over its picture: Finder, Explorer and

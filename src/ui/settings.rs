@@ -1163,14 +1163,16 @@ fn theme_picker(ui: &mut egui::Ui, app: &mut App) {
             info.current_text_value = Some(selected.to_owned());
             info
         });
-        if theme::soft_button(
-            ui,
-            &palette,
-            Some(Icon::ExternalLink),
-            &crate::i18n::gettext(app.locale, "Open themes folder"),
-            false,
-        )
-        .clicked()
+        // A page has no folder to show.
+        if ON_THE_DESKTOP
+            && theme::soft_button(
+                ui,
+                &palette,
+                Some(Icon::ExternalLink),
+                &crate::i18n::gettext(app.locale, "Open themes folder"),
+                false,
+            )
+            .clicked()
         {
             app.actions.push(Action::OpenThemesFolder);
         }

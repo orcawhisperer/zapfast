@@ -5,6 +5,7 @@
 //! are supported, with an optional `user:password@`.
 
 use std::sync::{OnceLock, RwLock};
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -17,8 +18,10 @@ use whatsapp_rust::transport::{Connector, TransportFactory};
 use whatsapp_rust::wacore::net::WHATSAPP_WEB_WS_URL;
 
 /// Time allowed to reach the proxy and open the tunnel.
+#[cfg(not(target_arch = "wasm32"))]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Longest proxy reply header accepted for an HTTP tunnel.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_REPLY: usize = 8 * 1024;
 const ENV_VARS: [&str; 4] = ["ALL_PROXY", "all_proxy", "HTTPS_PROXY", "https_proxy"];
 
@@ -111,6 +114,7 @@ impl Proxy {
     }
 
     /// The normalized URL with credentials, for HTTP clients; never log it.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn url(&self) -> &str {
         &self.url
     }
@@ -280,6 +284,7 @@ impl Proxy {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn socks_reply(code: u8) -> &'static str {
     match code {
         1 => "The proxy failed",
@@ -292,6 +297,7 @@ fn socks_reply(code: u8) -> &'static str {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn proxy_error(message: &str) -> std::io::Error {
     std::io::Error::other(message.to_owned())
 }

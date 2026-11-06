@@ -9,36 +9,57 @@
 //! are reported so the video can open in the system player instead.
 
 use crate::platform::Instant;
+#[cfg(not(target_arch = "wasm32"))]
 use std::cell::Cell;
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
-use std::path::{Path, PathBuf};
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
+use std::collections::BinaryHeap;
+use std::collections::VecDeque;
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
+use std::path::Path;
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Arc;
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc::TryRecvError;
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::Duration;
 
-use egui::{ColorImage, TextureHandle, TextureOptions};
+#[cfg(not(target_arch = "wasm32"))]
+use egui::TextureOptions;
+use egui::{ColorImage, TextureHandle};
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 use crate::backend::Waker;
 
 /// Longest side of a decoded frame in pixels: about twice the widest bubble.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_SIDE: u32 = 720;
 /// Longest side of a frame while the video covers the window.
+#[cfg(not(target_arch = "wasm32"))]
 const EXPANDED_SIDE: u32 = 1920;
 /// Frames decoded ahead of the clock.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 const AHEAD: usize = 4;
 /// How far the clock may drift from the sound before it follows it.
 const DRIFT: Duration = Duration::from_millis(60);
 /// How far ahead of the clock a decoder at another size starts, so its
 /// first frames are ready by the time they are due.
+#[cfg(not(target_arch = "wasm32"))]
 const LEAD: Duration = Duration::from_millis(400);
 /// How long a playing video may stay off screen before it pauses.
+#[cfg(not(target_arch = "wasm32"))]
 const UNSEEN: Duration = Duration::from_millis(1500);
 /// Longest wait between repaints while a video plays, for the progress.
+#[cfg(not(target_arch = "wasm32"))]
 const TICK: Duration = Duration::from_millis(40);
 /// How long a video plays silently after its sound output failed before the
 /// sound is opened again, doubling up to the longest with each failure.
+#[cfg(not(target_arch = "wasm32"))]
 const SOUND_RETRY: Duration = Duration::from_secs(1);
+#[cfg(not(target_arch = "wasm32"))]
 const SOUND_RETRY_LONGEST: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,6 +100,7 @@ pub enum Notice {
 }
 
 /// What the decoder thread hands to the interface thread.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 enum Delivery {
     /// The movie's length, sent before any frame.
     Length(Duration),
@@ -201,6 +223,7 @@ pub fn arc(center: egui::Pos2, radius: f32, fraction: f32) -> Vec<egui::Pos2> {
 }
 
 /// The sound of the playing video on the default output device.
+#[cfg(not(target_arch = "wasm32"))]
 struct Sound {
     device: crate::audio::Output,
     sink: rodio::Player,
@@ -213,6 +236,7 @@ struct Sound {
 /// A video's sound compressed by its playback speed as it plays, with the
 /// voice messages' pitch-keeping stretch, every channel kept: only a few
 /// thousand frames are held, never the rest of the track.
+#[cfg(not(target_arch = "wasm32"))]
 struct Stretched {
     stream: crate::timestretch::Stream<AacTrack>,
     channels: rodio::ChannelCount,
@@ -220,7 +244,9 @@ struct Stretched {
     total: Duration,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Stretched {
+    #[cfg(not(target_arch = "wasm32"))]
     fn new(track: AacTrack, factor: f32) -> Self {
         let channels = rodio::Source::channels(&track);
         let rate = rodio::Source::sample_rate(&track);
@@ -234,6 +260,7 @@ impl Stretched {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Iterator for Stretched {
     type Item = rodio::Sample;
 
@@ -242,6 +269,7 @@ impl Iterator for Stretched {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl rodio::Source for Stretched {
     fn current_span_len(&self) -> Option<usize> {
         None
@@ -262,6 +290,7 @@ impl rodio::Source for Stretched {
 
 /// Queues `track` on `sink` at `speed`: as decoded at 1x, streamed through
 /// the stretch above it.
+#[cfg(not(target_arch = "wasm32"))]
 fn queue_sound(sink: &rodio::Player, track: AacTrack, speed: f32) {
     if speed > 1.0 {
         sink.append(Stretched::new(track, speed));
@@ -270,6 +299,7 @@ fn queue_sound(sink: &rodio::Player, track: AacTrack, speed: f32) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Sound {
     /// Opens the file's sound, paused at `from`. A video without a sound
     /// track, or a computer without an output device, plays silently.
@@ -317,10 +347,12 @@ impl Sound {
 
 /// The video time reached after `played` of sound queued from `base` at
 /// `factor` times speed: each second heard covers `factor` of the video.
+#[cfg(not(target_arch = "wasm32"))]
 fn sound_position(base: Duration, played: Duration, factor: f32) -> Duration {
     base + played.mul_f32(factor)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn sound_decoder(path: &Path, from: Duration) -> Option<AacTrack> {
     // A video without a sound track stays quiet without a word. A sound
     // track that does not open, such as HE-AAC, is worth naming when a
@@ -339,6 +371,7 @@ fn sound_decoder(path: &Path, from: Duration) -> Option<AacTrack> {
 /// AAC decoder. rodio's own MP4 reader (symphonia 0.5's isomp4) refuses the
 /// sound of the videos WhatsApp sends, whose `esds` carries a custom
 /// SLConfigDescriptor (#265), so the track is read the way the picture is.
+#[cfg(not(target_arch = "wasm32"))]
 struct AacTrack {
     mp4: mp4::Mp4Reader<std::io::BufReader<crate::platform::sfs::File>>,
     track: u32,
@@ -357,6 +390,7 @@ struct AacTrack {
     total: Duration,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl AacTrack {
     fn open(path: &Path, from: Duration) -> Result<Self, String> {
         use symphonia::core::codecs::{CODEC_TYPE_AAC, CodecParameters, Decoder, DecoderOptions};
@@ -494,6 +528,7 @@ impl AacTrack {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Iterator for AacTrack {
     type Item = rodio::Sample;
 
@@ -518,6 +553,7 @@ impl Iterator for AacTrack {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl rodio::Source for AacTrack {
     fn current_span_len(&self) -> Option<usize> {
         None
@@ -538,6 +574,7 @@ impl rodio::Source for AacTrack {
 
 /// The codec and profile of the MP4's sound track, such as "aac (SBR)", or
 /// `None` when there is no sound track.
+#[cfg(not(target_arch = "wasm32"))]
 fn sound_codec(path: &Path) -> Option<String> {
     let file = crate::platform::sfs::File::open(path).ok()?;
     let size = file.metadata().ok()?.len();
@@ -555,6 +592,7 @@ fn sound_codec(path: &Path) -> Option<String> {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct Session {
     message: String,
     path: PathBuf,
@@ -582,12 +620,14 @@ struct Session {
 
 /// Frames of another size on their way: the video keeps playing the ones it
 /// has, sound and all, until these catch up with the clock.
+#[cfg(not(target_arch = "wasm32"))]
 struct Resize {
     side: u32,
     frames: Receiver<Delivery>,
     queue: VecDeque<(Duration, ColorImage)>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Session {
     fn pause(&mut self, now: Instant) {
         match self.state {
@@ -1062,6 +1102,7 @@ impl Player {
 
 /// Starts decoding `path` from `from` on its own thread. Dropping the
 /// receiver stops the thread at its next frame.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 fn spawn_decoder(path: &Path, from: Duration, side: u32, waker: Waker) -> Receiver<Delivery> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(AHEAD);
     let path = path.to_owned();
@@ -1129,6 +1170,7 @@ impl Iterator for Frames {
 
 /// Sample timing of a video track, in the track's own time units.
 #[derive(Debug, Default)]
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 struct Timeline {
     timescale: u64,
     /// Decode time of each sample, in sample order.
@@ -1139,6 +1181,7 @@ struct Timeline {
     shift: u64,
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 impl Timeline {
     fn of(track: &mp4::Mp4Track) -> Self {
         let stbl = &track.trak.mdia.minf.stbl;
@@ -1200,8 +1243,10 @@ impl Timeline {
 /// display order: H.264 reorders frames, so the decoder returns the
 /// earliest pending time next.
 #[derive(Default)]
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 struct Reorder(BinaryHeap<Reverse<i64>>);
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 impl Reorder {
     fn push(&mut self, time: i64) {
         self.0.push(Reverse(time));
@@ -1214,6 +1259,7 @@ impl Reorder {
 
 /// How many quarter turns clockwise a track's matrix rotates the picture.
 /// The matrix is `[a b; c d]` in 16.16 fixed point.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 fn quarter_turns(a: i32, b: i32, c: i32, d: i32) -> u8 {
     match (a.signum(), b.signum(), c.signum(), d.signum()) {
         (0, 1, -1, 0) => 1,
@@ -1224,6 +1270,7 @@ fn quarter_turns(a: i32, b: i32, c: i32, d: i32) -> u8 {
 }
 
 /// Size that fits `width` by `height` within `max_side` on its longest side.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 fn fitted(width: u32, height: u32, max_side: u32) -> (u32, u32) {
     let longest = width.max(height);
     if longest <= max_side || longest == 0 {
@@ -1237,6 +1284,7 @@ fn fitted(width: u32, height: u32, max_side: u32) -> (u32, u32) {
 
 /// Decodes `path` from `from` and sends its frames until they run out or
 /// the receiver goes away. Errors name why the file cannot play here.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 fn decode(
     path: &Path,
     from: Duration,
@@ -1333,9 +1381,11 @@ fn decode(
 
 /// Frames this close before a seek target are converted, so the picture
 /// showing at the target is ready.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 const FRAME: Duration = Duration::from_millis(100);
 
 /// Sends decoded frames from a start time on.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 struct Output<'a> {
     from: Duration,
     turns: u8,
@@ -1348,6 +1398,7 @@ struct Output<'a> {
     waker: &'a Waker,
 }
 
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 impl Output<'_> {
     /// Sends a frame shown at `at`. Frames before the start only prime the
     /// decoder after a seek. Returns false once nobody is listening.
@@ -1379,6 +1430,7 @@ impl Output<'_> {
 /// whole file to play. `turns` is quarter turns clockwise to apply while converting; a call passes
 /// [`orientation_turns`] of the peer's `device_orientation`, and `out` stays the size the picture
 /// has *before* those turns, since the rotation swaps the result's sides.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn rgb_image(
     y: &[u8],
     u: &[u8],
@@ -1450,6 +1502,7 @@ pub(crate) fn orientation_turns(orientation: u8) -> u8 {
 
 /// Turns one decoded frame into an upright picture no larger than `side`
 /// on its longest side.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 fn picture(yuv: &openh264::decoder::DecodedYUV<'_>, turns: u8, side: u32) -> Option<ColorImage> {
     use openh264::formats::YUVSource;
 
@@ -1473,6 +1526,7 @@ fn picture(yuv: &openh264::decoder::DecodedYUV<'_>, turns: u8, side: u32) -> Opt
 }
 
 /// A YUV 4:2:0 picture as the decoder leaves it.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 struct Planes<'a> {
     y: &'a [u8],
     u: &'a [u8],
@@ -1486,6 +1540,7 @@ struct Planes<'a> {
 /// sample per output pixel, so a large video costs about as much as a small
 /// one; when scaling, luma is averaged over the first two by two source
 /// pixels each output pixel covers, which keeps downscaled edges smooth.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 fn convert(planes: &Planes<'_>, out: (usize, usize), turns: u8) -> ColorImage {
     let (width, height) = planes.size;
     let (out_width, out_height) = out;
@@ -1529,6 +1584,7 @@ fn convert(planes: &Planes<'_>, out: (usize, usize), turns: u8) -> ColorImage {
 }
 
 /// One limited-range BT.601 pixel in RGB.
+#[cfg(any(not(target_arch = "wasm32"), feature = "demo"))]
 fn rgb(y: i32, u: i32, v: i32) -> egui::Color32 {
     let (c, d, e) = (298 * (y - 16), u - 128, v - 128);
     let channel = |value: i32| ((value + 128) >> 8).clamp(0, 255) as u8;

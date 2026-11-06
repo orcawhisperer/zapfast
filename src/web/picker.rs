@@ -147,6 +147,17 @@ pub fn keep_sound(path: &Path, state: &Path) -> Result<PathBuf, String> {
     Ok(kept)
 }
 
+/// Lets go of an incoming file once it has been sent: it lives only in memory,
+/// and the sent copy is in the media cache.
+pub fn release(path: &Path) {
+    if let Some(folder) = path
+        .parent()
+        .filter(|folder| folder.starts_with(INCOMING) && *folder != Path::new(INCOMING))
+    {
+        let _ = sfs::remove_dir_all(folder);
+    }
+}
+
 /// The files dropped or pasted since the last frame.
 pub fn take_arrived() -> Vec<PathBuf> {
     ARRIVED.with_borrow_mut(std::mem::take)

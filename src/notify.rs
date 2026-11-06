@@ -69,6 +69,7 @@ enum Stop {
 /// What a notification still to be shown was told meanwhile: `None` when its
 /// chat was read (don't show it), else whether it may wait for a click. A
 /// notification released in a burst before it appeared is still shown.
+#[cfg(not(target_arch = "wasm32"))]
 fn before_showing(cancelled: &mut tokio::sync::oneshot::Receiver<Stop>) -> Option<bool> {
     match cancelled.try_recv() {
         Err(tokio::sync::oneshot::error::TryRecvError::Empty) => Some(true),
@@ -316,6 +317,7 @@ const ALERT: &[u8] = include_bytes!("../assets/sounds/alert.wav");
 /// macOS a sound the notification plays is silenced along with the banner by
 /// Do Not Disturb, Focus, and the app's notification settings, so Pidgin's
 /// sounds go with it when the application bundle carries them.
+#[cfg(not(target_arch = "wasm32"))]
 fn sound_file(sound: &NotificationSound) -> Option<&'static str> {
     match sound {
         NotificationSound::Receive => Some("zapfast-receive.wav"),
@@ -406,7 +408,9 @@ pub fn play_sound(sound: NotificationSound) {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 trait ReadSeek: std::io::Read + std::io::Seek + Send + Sync {}
+#[cfg(not(target_arch = "wasm32"))]
 impl<T: std::io::Read + std::io::Seek + Send + Sync> ReadSeek for T {}
 
 /// The title and body of a notification while the app lock is on, or with
@@ -444,6 +448,7 @@ pub fn lines(
 }
 
 /// The bundle identifier packaging/macos gives the app.
+#[cfg(not(target_arch = "wasm32"))]
 const MACOS_BUNDLE_ID: &str = "me.paolino.fastsapp";
 
 /// The identity notifications are sent under. macOS refuses a client whose
@@ -451,6 +456,7 @@ const MACOS_BUNDLE_ID: &str = "me.paolino.fastsapp";
 /// mismatch leaves the app out of Notification Center: no banners, no sound,
 /// and no Dock badge. Elsewhere it is the app id the desktop entry and the
 /// Windows shortcuts use.
+#[cfg(not(target_arch = "wasm32"))]
 fn notification_app_id() -> &'static str {
     if cfg!(target_os = "macos") {
         MACOS_BUNDLE_ID
@@ -459,8 +465,6 @@ fn notification_app_id() -> &'static str {
     }
 }
 
-/// Fastframe owns the platform adapters and one bounded native worker. This
-/// thread only keeps ZapFast's account-scoped cancellation and click routing.
 /// Shows the browser's notification, and takes it back if the chat is read first.
 /// Without the person's permission it reports that it could not show.
 #[cfg(target_arch = "wasm32")]
@@ -496,6 +500,8 @@ fn deliver(
     });
 }
 
+/// Fastframe owns the platform adapters and one bounded native worker. This
+/// thread only keeps ZapFast's account-scoped cancellation and click routing.
 #[cfg(not(target_arch = "wasm32"))]
 #[expect(clippy::too_many_arguments)]
 fn deliver(

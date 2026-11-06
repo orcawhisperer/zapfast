@@ -458,13 +458,6 @@ thread_local! {
     static GRAPH: RefCell<Weak<Graph>> = const { RefCell::new(Weak::new()) };
 }
 
-/// What the canceller of the call under way reports: echo reduction, echo return loss, delay.
-pub(crate) fn echo_state() -> Option<(f64, f64, i32)> {
-    GRAPH
-        .with_borrow(Weak::upgrade)
-        .map(|graph| graph.cleaner.borrow().chain.metrics())
-}
-
 /// This call's graph, made by whichever of the two sides starts first.
 fn graph() -> Result<Rc<Graph>, JsValue> {
     if let Some(graph) = GRAPH.with_borrow(Weak::upgrade) {

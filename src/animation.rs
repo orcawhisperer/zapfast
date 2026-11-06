@@ -276,6 +276,7 @@ fn frame_inner(
                         Start::Busy => {
                             ctx.request_repaint_after(Duration::from_millis(150));
                         }
+                        #[cfg(not(target_arch = "wasm32"))]
                         Start::Failed => playing.complete = true,
                     }
                 }
@@ -319,6 +320,7 @@ fn frame_inner(
                 ctx.request_repaint_after(Duration::from_millis(150));
                 Frame::Pending
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Start::Failed => {
                 animations.entries.insert(path.to_path_buf(), Entry::Failed);
                 Frame::Unavailable
@@ -366,6 +368,7 @@ enum Start {
     Started,
     /// Every decoder slot is taken; try again shortly.
     Busy,
+    #[cfg(not(target_arch = "wasm32"))]
     Failed,
 }
 

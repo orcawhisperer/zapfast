@@ -63,8 +63,9 @@ pub fn that_detached(target: impl AsRef<OsStr>) -> Result<()> {
     let text = target.to_string_lossy();
     if text.starts_with("https://") || text.starts_with("http://") || text.starts_with("mailto:") {
         let window = web_sys::window().ok_or_else(|| unsupported("no window here"))?;
+        // Without noopener the linked page could steer this tab elsewhere.
         return window
-            .open_with_url_and_target(&text, "_blank")
+            .open_with_url_and_target_and_features(&text, "_blank", "noopener,noreferrer")
             .map(|_| ())
             .map_err(|_| Error::other("the browser refused to open the link"));
     }

@@ -89,8 +89,15 @@ pub fn pick_file_then(
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio::fs;
 
+/// Lets go of a file a page took in through its picker, a drop or a paste, once it
+/// has been sent. The desktop's are the person's own files, which stay.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn release_incoming(_path: &std::path::Path) {}
+
 #[cfg(target_arch = "wasm32")]
 pub use crate::web::open;
+#[cfg(target_arch = "wasm32")]
+pub use crate::web::picker::release as release_incoming;
 #[cfg(target_arch = "wasm32")]
 pub use crate::web::rfd::{FileDialog, pick_file_then};
 #[cfg(target_arch = "wasm32")]

@@ -17,7 +17,9 @@ use crate::platform::Instant;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use anyhow::{Context, Result, anyhow};
+#[cfg(not(target_arch = "wasm32"))]
+use anyhow::Context;
+use anyhow::{Result, anyhow};
 use egui::ColorImage;
 
 #[cfg(target_arch = "wasm32")]
@@ -26,7 +28,9 @@ mod browser;
 use browser::{CameraCapture, decode_remote};
 
 use crate::model::CallDirection;
-use crate::video_rate::{Cadence, Change as RateChange, FrameClock, RateControl, RateShare};
+#[cfg(not(target_arch = "wasm32"))]
+use crate::video_rate::Cadence;
+use crate::video_rate::{Change as RateChange, FrameClock, RateControl, RateShare};
 use whatsapp_rust::prelude::{Client, Jid};
 use whatsapp_rust::types::call::{CallAction, IncomingCall};
 use whatsapp_rust::types::group_call::{GroupCallParticipant, GroupCallUpdate};
@@ -480,6 +484,7 @@ pub use crate::call_audio::{AudioInput, AudioOutput, RATE};
 /// Read against the devices this call would really open rather than the system defaults alone: a
 /// machine whose default microphone is busy still takes a call aimed at one the user picked, so
 /// the check follows the same selections the streams will.
+#[cfg(not(target_arch = "wasm32"))]
 fn missing_audio_device(microphone: Option<&str>, speaker: Option<&str>) -> Option<&'static str> {
     crate::call_audio::unavailable(microphone, speaker)
 }
@@ -565,6 +570,7 @@ fn tile_picture(size: (usize, usize)) -> (usize, usize) {
 }
 
 /// One sender's picture being decoded.
+#[cfg(not(target_arch = "wasm32"))]
 struct RemoteStream {
     decoder: openh264::decoder::Decoder,
     /// Whether a keyframe has arrived, which is where a decoder can start.
@@ -598,6 +604,7 @@ struct CameraCapture {
 /// used, which the capture thread waits on.
 const CAMERA_STARTUP: std::time::Duration = std::time::Duration::from_secs(20);
 /// How long a stopping camera is waited for before its thread is left to finish on its own.
+#[cfg(not(target_arch = "wasm32"))]
 const CAMERA_RELEASE: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -668,8 +675,10 @@ impl Drop for CameraCapture {
 }
 
 /// Clears a capture's running flag on the way out, including when the thread panics.
+#[cfg(not(target_arch = "wasm32"))]
 struct CaptureAlive(Arc<AtomicBool>);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for CaptureAlive {
     fn drop(&mut self) {
         self.0.store(false, Ordering::Relaxed);
@@ -943,6 +952,7 @@ impl VideoPipeline {
 /// blocking, and the `openh264` encoder is not shared. Everything it hands out goes through a
 /// bounded channel with `try_send`, so a stalled consumer drops a frame instead of stalling the
 /// camera.
+#[cfg(not(target_arch = "wasm32"))]
 fn capture(
     device: Option<String>,
     timed: async_channel::Sender<TimedVideoFrame>,
@@ -979,6 +989,7 @@ fn capture(
 }
 
 /// What the camera thread reads between frames.
+#[cfg(not(target_arch = "wasm32"))]
 struct CaptureControls<'a> {
     /// Cleared when the camera is no longer wanted.
     stopping: &'a AtomicBool,
@@ -992,6 +1003,7 @@ struct CaptureControls<'a> {
 
 /// How the camera's frames are being sent right now: at what size, how many of them, and how fast.
 #[derive(Debug)]
+#[cfg(not(target_arch = "wasm32"))]
 struct SendPlan {
     /// The camera's own picture, within the capture budget.
     full: (usize, usize),
@@ -1004,6 +1016,7 @@ struct SendPlan {
     every: u32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl SendPlan {
     fn new(full: (usize, usize), camera_fps: f64, setting: crate::video_rate::Setting) -> Self {
         let tier = setting.tier();
@@ -1041,6 +1054,7 @@ impl SendPlan {
 }
 
 /// The encoder for one step of picture size and frame rate, and the rate it runs at.
+#[cfg(not(target_arch = "wasm32"))]
 struct CameraEncoder {
     encoder: openh264::encoder::Encoder,
     /// The rate the encoder was last moved to; `None` until the first frame has initialised it.
@@ -1050,6 +1064,7 @@ struct CameraEncoder {
     refused: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl CameraEncoder {
     /// Built at the step's ceiling. openh264 takes its rate limit from the configuration when the
     /// first frame initialises it, and a rate set later cannot pass that limit, so the wanted rate
@@ -1104,6 +1119,7 @@ const KEYFRAME_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
 ///
 /// Rate control keeps to the bitrate rather than to a quality: on a call the bitrate is what the
 /// path carries, and an encoder that overshoots it on a busy scene is sending loss.
+#[cfg(not(target_arch = "wasm32"))]
 fn video_encoder(
     fps: f64,
     bitrate: u32,
@@ -1126,11 +1142,6 @@ fn video_encoder(
 
 /// Moves a running encoder to `bitrate` without restarting it, so a rate change costs no keyframe.
 /// `false` if openh264 refused.
-#[cfg(target_arch = "wasm32")]
-fn set_encoder_bitrate(_encoder: &mut openh264::encoder::Encoder, _bitrate: u32) -> bool {
-    false
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 fn set_encoder_bitrate(encoder: &mut openh264::encoder::Encoder, bitrate: u32) -> bool {
     let mut info = openh264_sys2::SBitrateInfo {
@@ -1157,6 +1168,7 @@ fn set_encoder_bitrate(encoder: &mut openh264::encoder::Encoder, bitrate: u32) -
 /// sent are evenly spaced, and each carries the time the camera took it, snapped to that spacing.
 /// The frames in between are let go without being converted. The picture size, the frame rate and
 /// the bitrate follow the call's rate control, read between frames.
+#[cfg(not(target_arch = "wasm32"))]
 fn capture_frames(
     source: &mut crate::camera::Source,
     controls: CaptureControls<'_>,
@@ -1316,6 +1328,7 @@ fn capture_frames(
 }
 
 /// A camera frame as `openh264` wants it: three contiguous planes with no row padding.
+#[cfg(not(target_arch = "wasm32"))]
 struct Yuv420<'a> {
     y: &'a [u8],
     u: &'a [u8],
@@ -1323,6 +1336,7 @@ struct Yuv420<'a> {
     size: (usize, usize),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl openh264::formats::YUVSource for Yuv420<'_> {
     fn dimensions(&self) -> (usize, usize) {
         self.size
