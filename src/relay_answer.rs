@@ -1,4 +1,5 @@
-//! The SDP answer that lets a browser's `RTCPeerConnection` reach a WhatsApp call relay.
+//! How a browser's `RTCPeerConnection` reaches a WhatsApp call relay: the SDP answer that opens it,
+//! and what goes out over it when it falls behind.
 //!
 //! A relay speaks no SDP: it is a UDP endpoint the server names for a call. But a browser only
 //! opens a connection against an answer, so one is written here from what is known about the
@@ -9,6 +10,9 @@
 //! <https://github.com/oxidezap/client> (`crates/session/src/relay`), which is MIT licensed.
 
 use std::net::SocketAddr;
+
+use whatsapp_rust::wacore::voip::demux::{RelayPacketKind, classify_relay_packet};
+use whatsapp_rust::wacore::voip::rtp::{RTP_PAYLOAD_TYPE_H264, is_whatsapp_opus_rtp_payload};
 
 /// The certificate relays present. A browser insists on the far end's fingerprint, which the
 /// `<relay>` block does not carry. Seen to be the same across separate calls that reached different
@@ -57,9 +61,147 @@ pub fn answer(offer: &str, relay: SocketAddr, ufrag: &str, pwd: &str) -> Result<
     ))
 }
 
+/// How much unsent media the channel may hold before more video is dropped. At a call's rate this
+/// is a fraction of a second: past it the video is older than anything worth sending.
+const VIDEO_CEILING: u32 = 64 * 1024;
+
+/// How much it may hold before anything at all is dropped. A voice cannot be what filled it and is
+/// what a call can least lose, so it goes on past the ceiling above. Past this one the channel is
+/// not congested but stuck.
+const HARD_CEILING: u32 = 8 * VIDEO_CEILING;
+
+/// Where the video going out is between access units. The verdict is taken at a unit's first packet
+/// and holds to its last: a keyframe is itself larger than the ceiling, and one with a hole in it
+/// is worse than none, as is everything that refers to it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum VideoUnit {
+    Between,
+    Sending,
+    Dropping,
+}
+
+/// What became of the video unit a packet belongs to.
+#[derive(Debug, PartialEq)]
+pub struct Verdict {
+    pub next: VideoUnit,
+    /// This packet began a unit, and the whole of it is to be dropped.
+    pub dropped_unit: bool,
+}
+
+impl VideoUnit {
+    /// Whether a packet goes out with `buffered` bytes waiting, and where that leaves the video.
+    pub fn admit(self, packet: &[u8], buffered: u32) -> (bool, Verdict) {
+        let stays = Verdict {
+            next: self,
+            dropped_unit: false,
+        };
+        if buffered > HARD_CEILING {
+            // A unit part sent stays as it is: the rest of it will not arrive to end it, but the
+            // next one's verdict is the one that matters, and this channel is not coming back.
+            return (false, stays);
+        }
+        if classify_relay_packet(packet) != RelayPacketKind::Rtp {
+            return (true, stays);
+        }
+        let (marker, payload_type) = (packet[1] & 0x80 != 0, packet[1] & 0x7f);
+        if is_whatsapp_opus_rtp_payload(payload_type) {
+            return (true, stays);
+        }
+        if payload_type != RTP_PAYLOAD_TYPE_H264 {
+            return (buffered <= VIDEO_CEILING, stays);
+        }
+        let now = match self {
+            Self::Between if buffered <= VIDEO_CEILING => Self::Sending,
+            Self::Between => Self::Dropping,
+            going => going,
+        };
+        (
+            now == Self::Sending,
+            Verdict {
+                next: if marker { Self::Between } else { now },
+                dropped_unit: self == Self::Between && now == Self::Dropping,
+            },
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An RTP header of a payload type, with its marker or without.
+    fn rtp(payload_type: u8, marker: bool) -> Vec<u8> {
+        let mut packet = vec![0x80, payload_type | if marker { 0x80 } else { 0 }];
+        packet.resize(16, 0);
+        packet
+    }
+
+    const OVER: u32 = VIDEO_CEILING + 1;
+    const OPUS: u8 = whatsapp_rust::wacore::voip::rtp::RTP_PAYLOAD_TYPE_OPUS;
+
+    #[test]
+    fn a_full_channel_drops_all_of_a_video_frame_and_counts_it_once() {
+        let unit = VideoUnit::Between;
+        let (first, verdict) = unit.admit(&rtp(RTP_PAYLOAD_TYPE_H264, false), OVER);
+        assert!(!first);
+        assert!(verdict.dropped_unit);
+        // The channel has drained by now, but the frame already has a hole in it.
+        let (middle, next) = verdict.next.admit(&rtp(RTP_PAYLOAD_TYPE_H264, false), 0);
+        assert!(!middle);
+        assert!(!next.dropped_unit);
+        let (last, next) = next.next.admit(&rtp(RTP_PAYLOAD_TYPE_H264, true), 0);
+        assert!(!last);
+        assert_eq!(next.next, VideoUnit::Between);
+        // And the next frame goes out.
+        assert!(next.next.admit(&rtp(RTP_PAYLOAD_TYPE_H264, true), 0).0);
+    }
+
+    #[test]
+    fn a_frame_begun_is_finished_even_as_it_fills_the_channel() {
+        let (first, verdict) = VideoUnit::Between.admit(&rtp(RTP_PAYLOAD_TYPE_H264, false), 0);
+        assert!(first);
+        let (middle, verdict) = verdict.next.admit(&rtp(RTP_PAYLOAD_TYPE_H264, false), OVER);
+        assert!(middle, "the bytes before it are spent either way");
+        assert!(!verdict.dropped_unit);
+        let (last, verdict) = verdict.next.admit(&rtp(RTP_PAYLOAD_TYPE_H264, true), OVER);
+        assert!(last);
+        assert_eq!(verdict.next, VideoUnit::Between);
+    }
+
+    #[test]
+    fn a_voice_goes_on_past_the_ceiling_that_stops_video() {
+        assert!(VideoUnit::Between.admit(&rtp(OPUS, false), OVER).0);
+        assert!(VideoUnit::Dropping.admit(&rtp(OPUS, false), OVER).0);
+        assert!(
+            !VideoUnit::Between
+                .admit(&rtp(RTP_PAYLOAD_TYPE_H264, true), OVER)
+                .0
+        );
+    }
+
+    #[test]
+    fn a_voice_between_a_frames_packets_leaves_the_frames_verdict_alone() {
+        let (_, verdict) = VideoUnit::Sending.admit(&rtp(OPUS, true), 0);
+        assert_eq!(verdict.next, VideoUnit::Sending);
+    }
+
+    #[test]
+    fn nothing_goes_out_on_a_stuck_channel() {
+        let stuck = HARD_CEILING + 1;
+        assert!(!VideoUnit::Between.admit(&rtp(OPUS, false), stuck).0);
+        assert!(
+            !VideoUnit::Sending
+                .admit(&rtp(RTP_PAYLOAD_TYPE_H264, false), stuck)
+                .0
+        );
+        // STUN, which keeps the relay's allocation alive.
+        assert!(!VideoUnit::Between.admit(&[0x00; 20], stuck).0);
+    }
+
+    #[test]
+    fn stun_goes_out_while_video_is_held_back() {
+        assert!(VideoUnit::Dropping.admit(&[0x00; 20], OVER).0);
+    }
 
     fn relay() -> SocketAddr {
         "203.0.113.7:3480".parse().unwrap()

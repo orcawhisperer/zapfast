@@ -36,9 +36,16 @@ const INBOUND_DEPTH: usize = 256;
 /// How long a relay has to answer. There is one address to try, so this is the handshakes alone.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(12);
 
-/// How much unsent media the channel may hold before more is dropped. Past this it is older than
-/// anything worth sending, and a queue here would only delay a voice.
-const OUTBOUND_CEILING: u32 = 512 * 1024;
+thread_local! {
+    /// Access units dropped since the camera last looked, which leaves the peer's decoder without
+    /// its reference. The library thinks they went, as the send succeeded.
+    static SHED_UNITS: Cell<u32> = const { Cell::new(0) };
+}
+
+/// How many access units were dropped since this was last asked.
+pub fn take_shed_units() -> u32 {
+    SHED_UNITS.take()
+}
 
 /// How media reaches the relay in a page.
 pub struct BrowserRelay;
@@ -238,6 +245,7 @@ async fn connect(
             received,
             refused: Cell::new(false),
             shed: Cell::new(0),
+            unit: Cell::new(crate::relay_answer::VideoUnit::Between),
             closed: Cell::new(false),
         }),
         inbound,
@@ -253,6 +261,7 @@ struct Channel {
     /// Whether a refused write has been logged, which the engine does not do.
     refused: Cell<bool>,
     shed: Cell<u64>,
+    unit: Cell<crate::relay_answer::VideoUnit>,
     closed: Cell<bool>,
 }
 
@@ -263,8 +272,13 @@ impl RelayTransport for Channel {
         if channel.ready_state() != RtcDataChannelState::Open {
             bail!("the relay channel is not open");
         }
-        if channel.buffered_amount() > OUTBOUND_CEILING {
+        let (send, verdict) = self.unit.get().admit(&data, channel.buffered_amount());
+        self.unit.set(verdict.next);
+        if verdict.dropped_unit {
             self.shed.set(self.shed.get() + 1);
+            SHED_UNITS.set(SHED_UNITS.get().saturating_add(1));
+        }
+        if !send {
             return Ok(());
         }
         // Copied out of the program's memory into a buffer of the browser's own.
@@ -290,7 +304,7 @@ impl RelayTransport for Channel {
     async fn disconnect(&self) {
         if !self.closed.replace(true) {
             log::info!(
-                "[CALL] the relay's channel carried {} packets out, {} in, and shed {}",
+                "[CALL] the relay's channel carried {} packets out, {} in, and dropped {} video frames",
                 self.sent.get(),
                 self.received.get(),
                 self.shed.get(),

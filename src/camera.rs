@@ -646,13 +646,13 @@ mod backend {
     }
 }
 
-/// No camera through this path in a page: a call there uses getUserMedia.
+/// No camera opens through this path in a page: a call there uses getUserMedia (`calls::browser`).
 #[cfg(target_arch = "wasm32")]
 mod backend {
     use super::{Mode, Pixel};
 
     pub fn list() -> Vec<(String, String)> {
-        Vec::new()
+        crate::call_audio::cameras()
     }
 
     pub struct Camera(Mode);

@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use egui::{ColorImage, TextureHandle, TextureOptions};
-use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{CanvasRenderingContext2d, Event, HtmlCanvasElement, HtmlVideoElement};
 
 use crate::audio::{next_cycled_speed, supported_speed};
@@ -67,9 +67,25 @@ impl Copier {
         Some(Self { canvas, context })
     }
 
-    /// The current picture, with its longest side at most `side`.
+    /// The element's current picture, with its longest side at most `side`.
     pub(crate) fn picture(&self, video: &HtmlVideoElement, side: u32) -> Option<ColorImage> {
-        let (width, height) = (video.video_width(), video.video_height());
+        self.picture_of(
+            video.as_ref(),
+            video.video_width(),
+            video.video_height(),
+            side,
+        )
+    }
+
+    /// The picture from anything a canvas draws, `width` by `height`, with its longest side at
+    /// most `side`.
+    pub(crate) fn picture_of(
+        &self,
+        source: &JsValue,
+        width: u32,
+        height: u32,
+        side: u32,
+    ) -> Option<ColorImage> {
         if width == 0 || height == 0 {
             return None;
         }
@@ -83,9 +99,13 @@ impl Copier {
             self.canvas.set_height(out_height);
         }
         let (dw, dh) = (f64::from(out_width), f64::from(out_height));
-        self.context
-            .draw_image_with_html_video_element_and_dw_and_dh(video, 0.0, 0.0, dw, dh)
+        // Through the name, as web-sys has no binding that takes a decoder's frame.
+        let draw: js_sys::Function = js_sys::Reflect::get(&self.context, &"drawImage".into())
+            .ok()?
+            .dyn_into()
             .ok()?;
+        let arguments = js_sys::Array::of5(source, &0.into(), &0.into(), &dw.into(), &dh.into());
+        draw.apply(&self.context, &arguments).ok()?;
         let data = self.context.get_image_data(0.0, 0.0, dw, dh).ok()?.data();
         Some(ColorImage::from_rgba_unmultiplied(
             [out_width as usize, out_height as usize],

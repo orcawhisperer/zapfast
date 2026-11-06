@@ -56,6 +56,9 @@ Without one, the app asks for a key in its settings.
   certificate fingerprint is a constant: if WhatsApp ever changes it, calls stop connecting
   here alone. The browser cancels the echo, and asks for the microphone when a call starts.
   A peer's audio in plain Opus cannot be decoded, as that needs libopus.
+- Video in a call, through WebCodecs and the same rate control as the desktop's. A browser
+  without H.264 in WebCodecs goes on without the picture it cannot make or show, and says so
+  in the log. Each picture shown is copied out of a canvas, so large ones cost the page.
 - Installing as an app, and starting without a network on the archive already held.
 - GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video
@@ -84,7 +87,6 @@ Without one, the app asks for a key in its settings.
 
 - **Colour emoji in plain labels.** Messages and chat names have them, drawn by the
   browser. Menus and tooltips keep the fonts' monochrome glyphs.
-- **Video in a call.** H.264 still has its refusing stand-in, so a call carries voice only.
 - **Signal sticker packs.** They still use the blocking client, which always fails
   in a page, and Signal's servers refuse requests from a page anyway.
 - **Background work.** The app shares the page's one thread, so decoding and a

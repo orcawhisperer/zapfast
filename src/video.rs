@@ -1401,6 +1401,37 @@ pub(crate) fn rgb_image(
     )
 }
 
+/// `image` turned clockwise by `turns` quarter turns, for a browser's decoder, whose pictures come
+/// out of a canvas rather than through [`rgb_image`].
+#[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn turned(image: ColorImage, turns: u8) -> ColorImage {
+    let [width, height] = image.size;
+    let at = |x: usize, y: usize| image.pixels[y * width + x];
+    let pixels = match turns % 4 {
+        1 => (0..width)
+            .flat_map(|x| (0..height).rev().map(move |y| (x, y)))
+            .map(|(x, y)| at(x, y))
+            .collect(),
+        2 => (0..height)
+            .rev()
+            .flat_map(|y| (0..width).rev().map(move |x| (x, y)))
+            .map(|(x, y)| at(x, y))
+            .collect(),
+        3 => (0..width)
+            .rev()
+            .flat_map(|x| (0..height).map(move |y| (x, y)))
+            .map(|(x, y)| at(x, y))
+            .collect(),
+        _ => return image,
+    };
+    let size = if turns % 2 == 1 {
+        [height, width]
+    } else {
+        [width, height]
+    };
+    ColorImage::new(size, pixels)
+}
+
 /// How many quarter turns clockwise a peer's `device_orientation` asks the picture to take.
 ///
 /// WhatsApp's low two bits are a counter-clockwise quarter-turn count, not a clockwise one: the
@@ -1511,6 +1542,22 @@ fn rgb(y: i32, u: i32, v: i32) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A browser's pictures turn the way the desktop's do, or a phone's picture is upside down in
+    /// one of them.
+    #[test]
+    fn a_turned_picture_matches_the_one_turned_while_converting() {
+        // Every pixel its own brightness, with no colour to blur across them.
+        let y: Vec<u8> = (0..24u8).map(|n| 16 + n * 8).collect();
+        let (u, v) = (vec![128u8; 6], vec![128u8; 6]);
+        let convert = |turns| rgb_image(&y, &u, &v, (6, 3, 3), (6, 4), (6, 4), turns);
+        for turns in 0..4 {
+            let by_browser = turned(convert(0), turns);
+            let by_desktop = convert(turns);
+            assert_eq!(by_browser.size, by_desktop.size, "{turns} turns");
+            assert_eq!(by_browser.pixels, by_desktop.pixels, "{turns} turns");
+        }
+    }
 
     const SAMPLE: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),

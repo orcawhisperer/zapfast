@@ -14,9 +14,10 @@ on:
 permissions:
   contents: read
 
+# A release build takes a while, and its numbers are worth having, so a push waits for it.
 concurrency:
   group: web-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always

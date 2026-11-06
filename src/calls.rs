@@ -20,6 +20,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use anyhow::{Context, Result, anyhow};
 use egui::ColorImage;
 
+#[cfg(target_arch = "wasm32")]
+mod browser;
+#[cfg(target_arch = "wasm32")]
+use browser::{CameraCapture, decode_remote};
+
 use crate::model::CallDirection;
 use crate::video_rate::{Cadence, Change as RateChange, FrameClock, RateControl, RateShare};
 use whatsapp_rust::prelude::{Client, Jid};
@@ -574,6 +579,7 @@ struct RemoteStream {
 ///
 /// A device change starts a fresh thread rather than telling this one to switch: a running encoder
 /// carries state the new device's stream cannot inherit.
+#[cfg(not(target_arch = "wasm32"))]
 struct CameraCapture {
     timed: async_channel::Receiver<TimedVideoFrame>,
     /// Cleared when the camera is no longer wanted, and read by the capture loop between frames.
@@ -594,6 +600,7 @@ const CAMERA_STARTUP: std::time::Duration = std::time::Duration::from_secs(20);
 /// How long a stopping camera is waited for before its thread is left to finish on its own.
 const CAMERA_RELEASE: std::time::Duration = std::time::Duration::from_secs(2);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl CameraCapture {
     /// Opens `device` (the first camera when `None`) on a thread of its own and waits until it
     /// delivers, so a call never signals video it cannot send. Blocking: call it off the async loop.
@@ -653,6 +660,7 @@ impl CameraCapture {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Drop for CameraCapture {
     fn drop(&mut self) {
         self.stop();
@@ -731,41 +739,70 @@ impl VideoPipeline {
         call_id: &str,
     ) -> Result<(Self, async_channel::Receiver<VideoTick>)> {
         let diag = Arc::new(crate::call_diag::CallVideo::new(call_id));
+        #[cfg(target_arch = "wasm32")]
+        {
+            let (mut pipeline, ticks) = Self::without_camera(device, diag);
+            pipeline.camera = Self::camera_or_not(
+                CameraCapture::start(
+                    pipeline.device.clone(),
+                    pipeline.ticks.clone(),
+                    Arc::clone(&pipeline.rate_share),
+                    Arc::clone(&pipeline.diag),
+                )
+                .await,
+            );
+            Ok((pipeline, ticks))
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         crate::platform::spawn_blocking(move || Self::start_blocking(device, diag))
             .await
             .map_err(|error| anyhow!("the camera thread failed: {error}"))?
     }
 
+    /// A machine without a camera, or one whose camera is busy, still takes part in a video call:
+    /// it sees the other side, its own camera reads as off, and the camera button says why when
+    /// pressed.
+    fn camera_or_not(started: Result<CameraCapture>) -> Option<CameraCapture> {
+        match started {
+            Ok(camera) => Some(camera),
+            Err(error) => {
+                log::warn!("[CALL] the video call goes on without our camera: {error}");
+                None
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn start_blocking(
         device: Option<String>,
         diag: Arc<crate::call_diag::CallVideo>,
     ) -> Result<(Self, async_channel::Receiver<VideoTick>)> {
+        let (mut pipeline, ticks) = Self::without_camera(device, diag);
+        pipeline.camera = Self::camera_or_not(CameraCapture::start(
+            pipeline.device.clone(),
+            pipeline.ticks.clone(),
+            Arc::clone(&pipeline.rate_share),
+            Arc::clone(&pipeline.diag),
+        ));
+        Ok((pipeline, ticks))
+    }
+
+    /// The peer's decoder and the rate control, ready for a camera.
+    fn without_camera(
+        device: Option<String>,
+        diag: Arc<crate::call_diag::CallVideo>,
+    ) -> (Self, async_channel::Receiver<VideoTick>) {
         // Room for a picture from each of several group members between two drains.
         let (ticks, tick_rx) = async_channel::bounded::<VideoTick>(8);
         let (remote_tx, remote_rx) = async_channel::bounded::<VideoFrame>(8);
         decode_remote(remote_rx, ticks.clone(), Arc::clone(&diag));
         let rate_share = Arc::new(RateShare::default());
         let rate = RateControl::new(Arc::clone(&rate_share));
-        // A machine without a camera, or one whose camera is busy, still takes part in a video
-        // call: it sees the other side, its own camera reads as off, and the camera button says
-        // why when pressed.
-        let camera = match CameraCapture::start(
-            device.clone(),
-            ticks.clone(),
-            Arc::clone(&rate_share),
-            Arc::clone(&diag),
-        ) {
-            Ok(camera) => Some(camera),
-            Err(error) => {
-                log::warn!("[CALL] the video call goes on without our camera: {error}");
-                None
-            }
-        };
-        Ok((
+        (
             Self {
                 ticks,
                 remote_tx,
-                camera,
+                camera: None,
                 device,
                 rate,
                 rate_share,
@@ -775,7 +812,7 @@ impl VideoPipeline {
                 diag,
             },
             tick_rx,
-        ))
+        )
     }
 
     /// The rate and picture the camera is sent at right now.
@@ -862,12 +899,18 @@ impl VideoPipeline {
         let diag = Arc::clone(&self.diag);
         // The old camera is released first, on the same blocking thread, so the new one never
         // races it for the device.
+        #[cfg(not(target_arch = "wasm32"))]
         let camera = crate::platform::spawn_blocking(move || {
             drop(previous);
             CameraCapture::start(device, ticks, rate, diag)
         })
         .await
         .map_err(|error| anyhow!("the camera thread failed: {error}"))??;
+        #[cfg(target_arch = "wasm32")]
+        let camera = {
+            drop(previous);
+            CameraCapture::start(device, ticks, rate, diag).await?
+        };
         self.camera = Some(camera);
         Ok(())
     }
@@ -1309,6 +1352,7 @@ impl openh264::formats::YUVSource for Yuv420<'_> {
 /// own (at most [`MAX_REMOTE_STREAMS`]), so every member's picture reaches its own tile; a
 /// one-to-one call's carry no sender and share one. Runs on its own thread for the same reason the
 /// encoder does.
+#[cfg(not(target_arch = "wasm32"))]
 fn decode_remote(
     frames: async_channel::Receiver<VideoFrame>,
     ticks: async_channel::Sender<VideoTick>,

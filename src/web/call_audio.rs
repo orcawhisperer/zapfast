@@ -70,6 +70,7 @@ thread_local! {
     /// The microphones and speakers last named, as the desktop's pickers read them at once.
     static MICROPHONES: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
     static SPEAKERS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
+    static CAMERAS: RefCell<Vec<(String, String)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The microphones, as ids and names.
@@ -80,6 +81,11 @@ pub fn microphones() -> Vec<(String, String)> {
 /// The speakers, as ids and names. Empty where a browser cannot choose one.
 pub fn speakers() -> Vec<(String, String)> {
     SPEAKERS.with_borrow(Clone::clone)
+}
+
+/// The cameras, as ids and names.
+pub fn cameras() -> Vec<(String, String)> {
+    CAMERAS.with_borrow(Clone::clone)
 }
 
 /// Asks the browser again what it has. Without permission yet it names nothing worth listing.
@@ -95,6 +101,7 @@ pub async fn refresh_devices() {
     };
     let mut inputs = Vec::new();
     let mut outputs = Vec::new();
+    let mut cameras = Vec::new();
     for device in Array::from(&found).iter() {
         let Ok(device) = device.dyn_into::<web_sys::MediaDeviceInfo>() else {
             continue;
@@ -106,11 +113,13 @@ pub async fn refresh_devices() {
         match device.kind() {
             web_sys::MediaDeviceKind::Audioinput => inputs.push((id, label)),
             web_sys::MediaDeviceKind::Audiooutput => outputs.push((id, label)),
+            web_sys::MediaDeviceKind::Videoinput => cameras.push((id, label)),
             _ => {}
         }
     }
     MICROPHONES.set(inputs);
     SPEAKERS.set(outputs);
+    CAMERAS.set(cameras);
 }
 
 /// What the microphone is asked for: the browser's own echo cancelling and clean-up, which on the
