@@ -12,17 +12,29 @@ fn unsupported(what: &str) -> Error {
     Error::new(ErrorKind::Unsupported, what.to_owned())
 }
 
+/// An address for `bytes`, released a minute later, by when anything asking for
+/// them has them.
+pub(crate) fn temporary_url(bytes: &[u8]) -> Result<String> {
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
+        .map_err(|_| Error::other("the browser would not hold the file"))?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob)
+        .map_err(|_| Error::other("the browser would not offer the file"))?;
+    let release = url.clone();
+    gloo_timers::callback::Timeout::new(60_000, move || {
+        let _ = web_sys::Url::revoke_object_url(&release);
+    })
+    .forget();
+    Ok(url)
+}
+
 /// Offers the page's file at `path` as a download.
 fn download(path: &Path) -> Result<()> {
     let bytes = crate::web::sfs::read(path)?;
     let document = web_sys::window()
         .and_then(|window| window.document())
         .ok_or_else(|| unsupported("no document here"))?;
-    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes.as_slice()));
-    let blob = web_sys::Blob::new_with_u8_array_sequence(&parts)
-        .map_err(|_| Error::other("the browser would not hold the file"))?;
-    let url = web_sys::Url::create_object_url_with_blob(&blob)
-        .map_err(|_| Error::other("the browser would not offer the file"))?;
+    let url = temporary_url(&bytes)?;
     let anchor: web_sys::HtmlAnchorElement = document
         .create_element("a")
         .map_err(|_| Error::other("the browser would not offer the file"))?
@@ -35,11 +47,6 @@ fn download(path: &Path) -> Result<()> {
             .map_or_else(|| "file".into(), |name| name.to_string_lossy()),
     );
     anchor.click();
-    // Released after the browser has started on it.
-    let _ = gloo_timers::callback::Timeout::new(60_000, move || {
-        let _ = web_sys::Url::revoke_object_url(&url);
-    })
-    .forget();
     Ok(())
 }
 

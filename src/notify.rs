@@ -278,30 +278,27 @@ impl Notifications {
         }
         let undo = Arc::new(Mutex::new(Some(failed)));
         let undo_spawn = Arc::clone(&undo);
-        let spawned = std::thread::Builder::new()
-            .name("notification".into())
-            .spawn(move || {
-                let failed = move || {
-                    if let Some(undo) = undo_spawn.lock().unwrap_or_else(|p| p.into_inner()).take()
-                    {
-                        undo();
-                    }
-                };
-                if !played_by_notification(&sound) {
-                    play_sound(sound.clone());
+        let spawned = crate::platform::run_detached("notification", move || {
+            let failed = move || {
+                if let Some(undo) = undo_spawn.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                    undo();
                 }
-                deliver(
-                    &title,
-                    &body,
-                    picture.as_deref(),
-                    &sound,
-                    target,
-                    opened,
-                    wake,
-                    cancelled,
-                    failed,
-                )
-            });
+            };
+            if !played_by_notification(&sound) {
+                play_sound(sound.clone());
+            }
+            deliver(
+                &title,
+                &body,
+                picture.as_deref(),
+                &sound,
+                target,
+                opened,
+                wake,
+                cancelled,
+                failed,
+            )
+        });
         if let Err(error) = spawned {
             log::debug!("no thread for a notification: {error}");
             if let Some(undo) = undo.lock().unwrap_or_else(|p| p.into_inner()).take() {
@@ -353,6 +350,23 @@ fn native_sound(sound: &NotificationSound) -> fastframe_notifications::Sound {
 
 /// Plays a notification sound on its own thread, for notifications and
 /// their preview in Settings. System sounds and silence play nothing here.
+#[cfg(target_arch = "wasm32")]
+pub fn play_sound(sound: NotificationSound) {
+    let bytes = match sound {
+        NotificationSound::Receive => RECEIVE.to_vec(),
+        NotificationSound::Alert => ALERT.to_vec(),
+        NotificationSound::Custom(path) => match crate::platform::sfs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => return,
+        },
+        NotificationSound::System | NotificationSound::None => return,
+    };
+    crate::web::notify::play(&bytes);
+}
+
+/// Plays a notification sound on its own thread, for notifications and
+/// their preview in Settings. System sounds and silence play nothing here.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn play_sound(sound: NotificationSound) {
     let source: Box<dyn Fn() -> std::io::Result<Box<dyn ReadSeek>> + Send> = match sound {
         NotificationSound::Receive => Box::new(|| Ok(Box::new(std::io::Cursor::new(RECEIVE)))),
@@ -447,21 +461,39 @@ fn notification_app_id() -> &'static str {
 
 /// Fastframe owns the platform adapters and one bounded native worker. This
 /// thread only keeps ZapFast's account-scoped cancellation and click routing.
-/// A page's notifications are not wired up yet, so each reports it could not show.
+/// Shows the browser's notification, and takes it back if the chat is read first.
+/// Without the person's permission it reports that it could not show.
 #[cfg(target_arch = "wasm32")]
 #[expect(clippy::too_many_arguments)]
 fn deliver(
-    _title: &str,
-    _body: &str,
-    _picture: Option<&std::path::Path>,
-    _sound: &NotificationSound,
-    _target: NotificationTarget,
-    _opened: Arc<Mutex<Vec<NotificationTarget>>>,
-    _wake: impl Fn() + Send + 'static,
-    _cancelled: tokio::sync::oneshot::Receiver<Stop>,
+    title: &str,
+    body: &str,
+    picture: Option<&std::path::Path>,
+    sound: &NotificationSound,
+    target: NotificationTarget,
+    opened: Arc<Mutex<Vec<NotificationTarget>>>,
+    wake: impl Fn() + Send + 'static,
+    cancelled: tokio::sync::oneshot::Receiver<Stop>,
     failed: impl FnOnce(),
 ) {
-    failed();
+    let tag = format!("{}:{}", target.account.0, target.chat);
+    let silent = !matches!(sound, NotificationSound::System);
+    let clicked = move || {
+        opened
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .push(target.clone());
+        wake();
+    };
+    let Some(shown) = crate::web::notify::show(title, body, picture, silent, &tag, clicked) else {
+        failed();
+        return;
+    };
+    wasm_bindgen_futures::spawn_local(async move {
+        if !matches!(cancelled.await, Ok(Stop::Release)) {
+            shown.close();
+        }
+    });
 }
 
 #[cfg(not(target_arch = "wasm32"))]

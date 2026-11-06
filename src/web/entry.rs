@@ -125,10 +125,29 @@ fn ask_to_persist() {
     });
 }
 
+/// Registers the installed app's service worker. Only worth a warning: without it
+/// the page still runs, and cannot be installed or start offline.
+fn register_service_worker() {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let promise = window
+        .navigator()
+        .service_worker()
+        .register("service-worker.js");
+    wasm_bindgen_futures::spawn_local(async move {
+        if wasm_bindgen_futures::JsFuture::from(promise).await.is_err() {
+            log::warn!("could not register the service worker");
+        }
+    });
+}
+
 /// Loads everything the app reads without waiting: databases, keys and settings.
 async fn prepare_storage() -> Result<(), String> {
     claim_storage().await?;
     ask_to_persist();
+    register_service_worker();
+    crate::web::notify::ask_on_first_click();
     crate::web::sqlite::install().await?;
     let database = crate::web::idb::open().await?;
     crate::web::keys::load(database.clone())
@@ -167,7 +186,10 @@ async fn run() -> Result<(), String> {
                 cc.egui_ctx
                     .add_bytes_loader(std::sync::Arc::new(crate::web::images::PageFiles));
                 let app = make_app(&cc.egui_ctx, &waker)?;
-                Ok(Box::new(Page { app }))
+                Ok(Box::new(Page {
+                    app,
+                    shown_unread: None,
+                }))
             }),
         )
         .await
@@ -187,12 +209,20 @@ fn show_failure(reason: &str) {
 /// The app in the browser's window.
 struct Page {
     app: App,
+    /// The unread count last shown in the tab and on the app's icon.
+    shown_unread: Option<u32>,
 }
 
 impl eframe::App for Page {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.app.background_frame(ctx);
         self.app.window_logic(ctx);
+        // The app's own count, which leaves out locked chats.
+        let unread = self.app.unread_chat_count_everywhere();
+        if self.shown_unread != Some(unread) {
+            self.shown_unread = Some(unread);
+            crate::web::notify::show_unread(unread);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

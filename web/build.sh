@@ -25,4 +25,6 @@ mkdir -p dist/web
 wasm-bindgen --target web --no-typescript --out-dir dist/web \
     "$CARGO_TARGET_DIR/wasm32-unknown-unknown/$folder/zapfast-web.wasm"
 cp web/static/* dist/web/
+cp packaging/macos/icon-1024.png dist/web/icon-1024.png
+cp packaging/icons/zapfast.svg dist/web/icon.svg
 du -sh dist/web/*

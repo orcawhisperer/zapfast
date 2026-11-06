@@ -34,6 +34,11 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
   receiving messages, and staying linked across a reload.
 - Attachments from the picker, a drop, or a paste, and files offered as browser
   downloads. Sending one has not been tried on an account yet.
+- Notifications, with their sounds, and the unread count in the tab and on the app's
+  icon. Permission is asked on the first click. They have not been tried on an
+  account yet, and browsers that only offer them through a service worker, such as
+  on Android, show none.
+- Installing as an app, and starting without a network on the archive already held.
 - Storage that survives a reload, kept to one tab at a time. The archive and the
   device store are encrypted. Each has a random key, wrapped by a master key the
   browser holds as non-extractable.
@@ -68,7 +73,7 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 - **Other file dialogs:** a profile or group picture, a wallpaper, a sound, stickers,
   and saving elsewhere still open nothing. Attachments have their picker.
 - **Copying a picture to the clipboard.** Pasting one works.
-- **Notifications, cameras, calls, and installing as an app.**
+- **Cameras and calls.**
 
 ## What a browser cannot do
 

@@ -8,6 +8,7 @@ pub mod http;
 pub mod idb;
 pub mod images;
 pub mod keys;
+pub mod notify;
 pub mod open;
 pub mod picker;
 pub mod rfd;
