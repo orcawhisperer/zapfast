@@ -298,3 +298,36 @@ impl Player {
         Ok(())
     }
 }
+
+/// A short sound repeating through its own element, until dropped.
+pub struct Looping {
+    audio: HtmlAudioElement,
+    url: String,
+}
+
+impl Looping {
+    /// Mono `samples` at `rate`. A page that has not been clicked yet may be refused
+    /// sound, and then this stays silent.
+    pub fn start(samples: &[f32], rate: u32) -> Option<Self> {
+        let bytes = crate::pcm::wav(samples, rate);
+        let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes.as_slice()));
+        let blob = web_sys::Blob::new_with_u8_array_sequence(&parts).ok()?;
+        let url = web_sys::Url::create_object_url_with_blob(&blob).ok()?;
+        let audio = HtmlAudioElement::new_with_src(&url).ok()?;
+        audio.set_loop(true);
+        if let Ok(playing) = audio.play() {
+            // Refused sound is not worth a console error.
+            wasm_bindgen_futures::spawn_local(async move {
+                let _ = wasm_bindgen_futures::JsFuture::from(playing).await;
+            });
+        }
+        Some(Self { audio, url })
+    }
+}
+
+impl Drop for Looping {
+    fn drop(&mut self) {
+        let _ = self.audio.pause();
+        let _ = web_sys::Url::revoke_object_url(&self.url);
+    }
+}

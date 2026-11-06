@@ -51,6 +51,12 @@ Without one, the app asks for a key in its settings.
   goes through the browser's download, so its settings say where. Making a sticker needs
   a browser whose canvas encodes WebP.
 - Copying a picture to the clipboard, as a PNG.
+- Voice calls, with WhatsApp's own codec, which is pure Rust. The media reaches the relay
+  through an `RTCPeerConnection` given a written SDP answer (`src/relay_answer.rs`), whose
+  certificate fingerprint is a constant: if WhatsApp ever changes it, calls stop connecting
+  here alone. The browser cancels the echo, and asks for the microphone when a call starts.
+  A peer's audio in plain Opus cannot be decoded, as that needs libopus. Not tried on a real
+  call yet.
 - Installing as an app, and starting without a network on the archive already held.
 - GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video
@@ -79,14 +85,13 @@ Without one, the app asks for a key in its settings.
 
 - **Colour emoji in plain labels.** Messages and chat names have them, drawn by the
   browser. Menus and tooltips keep the fonts' monochrome glyphs.
-- **A call's camera and sound.** The Opus and H.264 stand-ins always refuse.
+- **Video in a call.** H.264 still has its refusing stand-in, so a call carries voice only.
 - **Signal sticker packs.** They still use the blocking client, which always fails
   in a page, and Signal's servers refuse requests from a page anyway.
 - **Background work.** The app shares the page's one thread, so decoding and a
   history sync hold up drawing.
 - **Exporting a chat, and setting aside an unreadable archive.** Both need a second
   way into a database, which this storage does not offer. Export says so when asked.
-- **Cameras and calls.**
 
 ## What a browser cannot do
 

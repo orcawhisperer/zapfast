@@ -2,18 +2,21 @@
 //! files, and native dialogs. Compiled only for wasm32; the desktop build never
 //! sees it.
 
+pub mod call_audio;
 mod entry;
 pub mod file;
 pub mod http;
 pub mod idb;
 pub mod images;
 pub mod keys;
+pub mod microphone;
 pub mod notify;
 pub mod open;
 pub mod picker;
 pub mod pictures;
 pub mod player;
 pub mod recorder;
+pub mod relay;
 pub mod rfd;
 pub mod runtime;
 pub mod sfs;

@@ -486,6 +486,7 @@ fn missing_audio_device(microphone: Option<&str>, speaker: Option<&str>) -> Opti
 /// already moves its other device discovery to `spawn_blocking` for exactly this reason: a slow or
 /// wedged audio stack would otherwise hold up message handling and signaling while a call starts.
 /// The microphone and speaker names are cloned in, so nothing borrowed crosses the thread.
+#[cfg(not(target_arch = "wasm32"))]
 async fn missing_audio_device_off_thread(
     microphone: Option<String>,
     speaker: Option<String>,
@@ -497,6 +498,16 @@ async fn missing_audio_device_off_thread(
     // A panicked check is not a machine without devices: refusing the call over it would be a lie,
     // so it is treated as "nothing missing" and the ordinary open path reports what it finds.
     .unwrap_or(None)
+}
+
+/// The same check in a browser, which names no device until it is allowed to use one: this is
+/// where the person is asked for the microphone, so a refusal fails the call before it rings.
+#[cfg(target_arch = "wasm32")]
+async fn missing_audio_device_off_thread(
+    microphone: Option<String>,
+    _speaker: Option<String>,
+) -> Option<&'static str> {
+    crate::call_audio::ask_for_microphone(microphone.as_deref()).await
 }
 
 /// Whether a requested video path really came up.

@@ -230,9 +230,10 @@ fastframe-update = { git = "https://github.com/crmne/fastframe", tag = "v0.15.4"
 
 # The browser build, on wasm32-unknown-unknown. The same whatsapp-rust revision
 # without its native transport and relay: the page supplies a WebSocket, fetch,
-# and an RTCPeerConnection. `voip-runtime` is the portable half of calls.
+# and an RTCPeerConnection. `voip-mlow` is the portable half of calls, with WhatsApp's own
+# call codec, which is pure Rust.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "e634d245f71d66e2ae55f79ef714c4ca01615ed8", default-features = false, features = ["sqlite-storage", "voip-runtime"] }
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "e634d245f71d66e2ae55f79ef714c4ca01615ed8", default-features = false, features = ["sqlite-storage", "voip-mlow"] }
 # Browser randomness for the protocol. Not whatsapp-rust's own `js`, which also
 # asks for sqlite-wasm-rs 0.6: Cargo allows one `links = "wsqlite3"` in the whole
 # resolve and rusqlite 0.40 needs 0.5, which has the browser bindings built in.
@@ -251,7 +252,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["BinaryType", "CloseEvent", "Event", "Headers", "MessageEvent", "Request", "RequestInit", "RequestMode", "RequestRedirect", "Response", "AddEventListenerOptions", "BlobPropertyBag", "ProgressEvent", "ReadableStream", "ReadableStreamDefaultReader", "XmlHttpRequest", "XmlHttpRequestEventTarget", "XmlHttpRequestResponseType", "XmlHttpRequestUpload", "CanvasRenderingContext2d", "ImageData", "AudioContext", "AudioDestinationNode", "AudioNode", "AudioWorklet", "AudioWorkletNode", "BaseAudioContext", "MediaDevices", "MediaStream", "MediaStreamAudioSourceNode", "MediaStreamConstraints", "MediaStreamTrack", "MessagePort", "Worklet", "HtmlAudioElement", "HtmlVideoElement", "MediaError", "HtmlMediaElement", "Notification", "NotificationOptions", "NotificationPermission", "ServiceWorkerContainer", "Blob", "ClipboardEvent", "Crypto", "CryptoKey", "CssStyleDeclaration", "DataTransfer", "EventTarget", "File", "FileList", "HtmlAnchorElement", "HtmlElement", "HtmlInputElement", "Node", "Url", "Document", "Element", "IdbDatabase", "IdbFactory", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "SubtleCrypto", "HtmlCanvasElement", "Location", "Navigator", "StorageManager", "WebSocket", "Window", "WorkerGlobalScope"] }
+web-sys = { version = "0.3", features = ["BinaryType", "CloseEvent", "Event", "Headers", "MessageEvent", "Request", "RequestInit", "RequestMode", "RequestRedirect", "Response", "AddEventListenerOptions", "BlobPropertyBag", "ProgressEvent", "ReadableStream", "ReadableStreamDefaultReader", "XmlHttpRequest", "XmlHttpRequestEventTarget", "XmlHttpRequestResponseType", "XmlHttpRequestUpload", "RtcConfiguration", "RtcDataChannel", "RtcDataChannelInit", "RtcDataChannelState", "RtcDataChannelType", "RtcPeerConnection", "RtcSdpType", "RtcSessionDescriptionInit", "MediaDeviceInfo", "MediaDeviceKind", "AudioContextOptions", "AudioContextState", "CanvasRenderingContext2d", "ImageData", "AudioContext", "AudioDestinationNode", "AudioNode", "AudioWorklet", "AudioWorkletNode", "BaseAudioContext", "MediaDevices", "MediaStream", "MediaStreamAudioSourceNode", "MediaStreamConstraints", "MediaStreamTrack", "MessagePort", "Worklet", "HtmlAudioElement", "HtmlVideoElement", "MediaError", "HtmlMediaElement", "Notification", "NotificationOptions", "NotificationPermission", "ServiceWorkerContainer", "Blob", "ClipboardEvent", "Crypto", "CryptoKey", "CssStyleDeclaration", "DataTransfer", "EventTarget", "File", "FileList", "HtmlAnchorElement", "HtmlElement", "HtmlInputElement", "Node", "Url", "Document", "Element", "IdbDatabase", "IdbFactory", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "SubtleCrypto", "HtmlCanvasElement", "Location", "Navigator", "StorageManager", "WebSocket", "Window", "WorkerGlobalScope"] }
 # std::time::Instant panics on wasm32-unknown-unknown.
 web-time = "1"
 # Its clock asks the browser here.

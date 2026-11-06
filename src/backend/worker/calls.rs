@@ -1364,6 +1364,8 @@ pub(super) fn missed_call_stub(stub: wa::web_message_info::StubType) -> Option<C
 /// runs on a blocking thread rather than on the async loop, where a slow device would hold up
 /// message handling and the call's own events.
 async fn discover_devices() -> calls::DeviceList {
+    #[cfg(target_arch = "wasm32")]
+    crate::call_audio::refresh_devices().await;
     crate::platform::spawn_blocking(calls::devices)
         .await
         .unwrap_or_default()

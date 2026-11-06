@@ -3196,6 +3196,11 @@ impl Worker {
         match bot {
             Ok(bot) => {
                 let handle = bot.spawn();
+                // A page has no socket for a call's media: it reaches the relay its own way.
+                #[cfg(target_arch = "wasm32")]
+                handle
+                    .client()
+                    .set_relay_transport_provider(Arc::new(crate::web::relay::BrowserRelay));
                 self.client = Some(handle.client());
                 self.handle = Some(handle);
                 self.set_status(LinkStatus::Connecting);

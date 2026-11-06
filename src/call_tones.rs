@@ -106,11 +106,24 @@ impl Tones {
     }
 }
 
+/// A tone looping in the browser's own audio element; dropping it stops the tone.
+#[cfg(target_arch = "wasm32")]
+struct Playing(crate::web::player::Looping);
+
+#[cfg(target_arch = "wasm32")]
+impl Playing {
+    fn start(tone: Tone) -> Option<Self> {
+        crate::web::player::Looping::start(&cycle(tone), RATE).map(Self)
+    }
+}
+
 /// A tone playing on its own thread; dropping it stops the tone.
+#[cfg(not(target_arch = "wasm32"))]
 struct Playing {
     _stop: std::sync::mpsc::Sender<()>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Playing {
     fn start(tone: Tone) -> Option<Self> {
         let (stop, stopped) = std::sync::mpsc::channel::<()>();

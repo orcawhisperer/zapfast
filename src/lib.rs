@@ -28,7 +28,10 @@ pub mod backdrop;
 pub mod backend;
 pub mod bidi;
 pub mod blocking;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod call_audio;
+#[cfg(target_arch = "wasm32")]
+pub use web::call_audio;
 pub mod call_diag;
 pub mod call_tones;
 pub mod calls;
@@ -55,10 +58,12 @@ pub mod new_group;
 pub mod notify;
 pub mod opener;
 pub mod paths;
+pub mod pcm;
 pub mod platform;
 pub mod privacy;
 pub mod proxy;
 pub mod qr;
+pub mod relay_answer;
 pub mod safety;
 pub mod settings;
 pub mod single_instance;
