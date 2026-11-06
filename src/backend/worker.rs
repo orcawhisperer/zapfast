@@ -307,6 +307,23 @@ async fn fetch_attachment(
     debug_assert_eq!(path.parent(), Some(dir));
     let (target, temporary, file) = stage_attachment(path, cache).await?;
     let _staged = Staged(temporary.clone());
+    // A page's library hands the writer everything at once, at the end, so the
+    // progress is read from the response as it arrives instead.
+    #[cfg(target_arch = "wasm32")]
+    let (progress, _watch) = match (
+        progress,
+        downloadable.direct_path(),
+        downloadable.file_length(),
+    ) {
+        (Some(progress), Some(direct_path), Some(total)) => {
+            let progress = std::cell::RefCell::new(progress);
+            let watch = crate::web::http::watch_download(direct_path, move |received| {
+                progress.borrow_mut().report(received.min(total), total);
+            });
+            (None, Some(watch))
+        }
+        (progress, ..) => (progress, None),
+    };
     let result = client
         .download_to_writer(
             downloadable,
@@ -13444,24 +13461,25 @@ async fn upload_media(
     if uploading.cancelled() {
         return Err(UPLOAD_CANCELLED.to_owned());
     }
-    // A page's fetch takes the whole body at once and does not say how much has
-    // gone, so there is no reader to count through, and the bar stays until it ends.
+    // A page cannot stream a body from a reader. Its library sends all of it at
+    // once, and the request reports how much has gone, and stops on a cancel.
     #[cfg(target_arch = "wasm32")]
     {
-        let length = bytes.len() as u64;
+        let (progress, gate) = (Arc::clone(&uploading.progress), uploading.gate.clone());
+        let _watch = crate::web::http::watch_upload(bytes.len() as u64, move |done, total| {
+            progress
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .report(done, total);
+            !gate.is_cancelled()
+        });
         let upload = client
             .upload(bytes, media_type, UploadOptions::default())
-            .await
-            .map_err(|error| error.to_string())?;
+            .await;
         if uploading.cancelled() {
             return Err(UPLOAD_CANCELLED.to_owned());
         }
-        uploading
-            .progress
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .report(length, length);
-        Ok(upload)
+        upload.map_err(|error| error.to_string())
     }
     #[cfg(not(target_arch = "wasm32"))]
     upload_media_counted(client, bytes, media_type, uploading).await
