@@ -16,8 +16,14 @@ impl BytesLoader for PageFiles {
         let Some(path) = uri.strip_prefix("file://") else {
             return Err(LoadError::NotSupported);
         };
-        let bytes =
-            crate::web::sfs::read(path).map_err(|error| LoadError::Loading(error.to_string()))?;
+        let bytes = match crate::web::sfs::read(path) {
+            Ok(bytes) => bytes,
+            // On its way from storage, and the window repaints when it lands.
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                return Ok(BytesPoll::Pending { size: None });
+            }
+            Err(error) => return Err(LoadError::Loading(error.to_string())),
+        };
         Ok(BytesPoll::Ready {
             size: None,
             bytes: Bytes::Shared(Arc::from(bytes)),

@@ -103,6 +103,44 @@ async fn wrap_key(master: &CryptoKey, key: &[u8; 32]) -> Result<Vec<u8>> {
     Ok(stored)
 }
 
+/// Encrypts a stored file with the master key.
+pub async fn seal(bytes: &[u8]) -> Result<Vec<u8>> {
+    let master = KEYRING
+        .with_borrow(|keyring| keyring.master.clone())
+        .context("no master key")?;
+    let mut iv = [0; IV_LENGTH];
+    getrandom::fill(&mut iv).map_err(|error| anyhow!("{error}"))?;
+    let promise = subtle()?
+        .encrypt_with_object_and_u8_array(&algorithm(Some(&iv))?, &master, bytes)
+        .map_err(|_| anyhow!("could not ask to seal a file"))?;
+    let buffer = JsFuture::from(promise)
+        .await
+        .map_err(|_| anyhow!("the browser would not seal a file"))?;
+    let sealed = Uint8Array::new(&buffer);
+    let mut stored = Vec::with_capacity(IV_LENGTH + sealed.length() as usize);
+    stored.extend_from_slice(&iv);
+    stored.extend(sealed.to_vec());
+    Ok(stored)
+}
+
+/// Decrypts what [`seal`] stored.
+pub async fn open(stored: &[u8]) -> Result<Vec<u8>> {
+    if stored.len() <= IV_LENGTH {
+        bail!("a stored file is too short");
+    }
+    let master = KEYRING
+        .with_borrow(|keyring| keyring.master.clone())
+        .context("no master key")?;
+    let (iv, sealed) = stored.split_at(IV_LENGTH);
+    let promise = subtle()?
+        .decrypt_with_object_and_u8_array(&algorithm(Some(iv))?, &master, sealed)
+        .map_err(|_| anyhow!("could not ask to open a file"))?;
+    let buffer = JsFuture::from(promise)
+        .await
+        .map_err(|_| anyhow!("a stored file would not open"))?;
+    Ok(Uint8Array::new(&buffer).to_vec())
+}
+
 /// Loads the master key, or makes one, and opens every stored key.
 pub async fn load(database: IdbDatabase) -> Result<()> {
     let stored = idb::all(&database, idb::KEYS)

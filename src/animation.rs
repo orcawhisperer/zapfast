@@ -381,22 +381,29 @@ fn start_decode(ctx: &egui::Context, inbox: &Inbox, path: &Path, all: bool) -> S
     let ctx = ctx.clone();
     let inbox = inbox.clone();
     let limit = if all { MAX_FRAMES } else { 1 };
-    // A page cannot decode H.264 itself, and its <video> answers only later.
+    // A file may first have to come from storage, a page cannot decode H.264 itself,
+    // and its <video> answers only later.
     #[cfg(target_arch = "wasm32")]
-    if !matches!(
-        file.extension()
-            .map(|kind| kind.to_string_lossy().to_ascii_lowercase())
-            .as_deref(),
-        Some("jpg" | "jpeg" | "png" | "webp" | "gif" | "was")
-    ) {
+    {
         wasm_bindgen_futures::spawn_local(async move {
             let _slot = slot;
-            const STEP: Duration = Duration::from_millis(66);
-            let decoded = crate::web::video::stepped_frames(&file, limit, STEP, MAX_WIDTH)
-                .await
-                .map(|frames| Decoded {
-                    frames: frames.into_iter().map(|frame| (frame, STEP)).collect(),
-                });
+            crate::web::sfs::ensure_loaded(&file).await;
+            let still = matches!(
+                file.extension()
+                    .map(|kind| kind.to_string_lossy().to_ascii_lowercase())
+                    .as_deref(),
+                Some("jpg" | "jpeg" | "png" | "webp" | "gif" | "was")
+            );
+            let decoded = if still {
+                decode(&file, limit)
+            } else {
+                const STEP: Duration = Duration::from_millis(66);
+                crate::web::video::stepped_frames(&file, limit, STEP, MAX_WIDTH)
+                    .await
+                    .map(|frames| Decoded {
+                        frames: frames.into_iter().map(|frame| (frame, STEP)).collect(),
+                    })
+            };
             inbox
                 .0
                 .lock()
@@ -404,8 +411,22 @@ fn start_decode(ctx: &egui::Context, inbox: &Inbox, path: &Path, all: bool) -> S
                 .push((file, decoded, all));
             ctx.request_repaint();
         });
-        return Start::Started;
+        Start::Started
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    start_decode_thread(ctx, inbox, file, slot, limit, all)
+}
+
+/// Decodes on a thread of its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn start_decode_thread(
+    ctx: egui::Context,
+    inbox: Inbox,
+    file: std::path::PathBuf,
+    slot: DecodeSlot,
+    limit: usize,
+    all: bool,
+) -> Start {
     let spawned = crate::platform::run_detached("animation-decode", move || {
         let _slot = slot;
         // Convert decoder panics to failed results.

@@ -62,7 +62,18 @@ pub fn that_detached(target: impl AsRef<OsStr>) -> Result<()> {
     }
     let path = Path::new(target);
     if crate::web::sfs::metadata(path).is_ok_and(|metadata| metadata.is_file()) {
-        return download(path);
+        if crate::web::sfs::is_loaded(path) {
+            return download(path);
+        }
+        // On its way from storage, and offered once it is here.
+        let path = path.to_owned();
+        wasm_bindgen_futures::spawn_local(async move {
+            crate::web::sfs::ensure_loaded(&path).await;
+            if download(&path).is_err() {
+                log::warn!("could not offer a stored file as a download");
+            }
+        });
+        return Ok(());
     }
     Err(unsupported("a page cannot open folders"))
 }

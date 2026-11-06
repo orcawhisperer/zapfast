@@ -6,6 +6,7 @@ use std::path::Path;
 use crate::web::sfs;
 
 pub async fn read(path: impl AsRef<Path>) -> Result<Vec<u8>> {
+    sfs::ensure_loaded(path.as_ref()).await;
     sfs::read(path)
 }
 
@@ -30,5 +31,6 @@ pub async fn metadata(path: impl AsRef<Path>) -> Result<sfs::Metadata> {
 }
 
 pub async fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<u64> {
+    sfs::ensure_loaded(from.as_ref()).await;
     sfs::copy(from, to)
 }

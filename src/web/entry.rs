@@ -218,8 +218,9 @@ async fn prepare_storage() -> Result<(), String> {
     crate::web::keys::load(database.clone())
         .await
         .map_err(|error| format!("{error:#}"))?;
-    let root = std::path::Path::new(ROOT);
-    crate::web::sfs::hydrate(database, AppDirs::under(root).cache)
+    let cache = AppDirs::under(std::path::Path::new(ROOT)).cache;
+    let unsaved = cache.join("incoming");
+    crate::web::sfs::hydrate(database, cache, unsaved)
         .await
         .map_err(|error| error.to_string())
 }
@@ -248,6 +249,8 @@ async fn run() -> Result<(), String> {
             Box::new(move |cc| {
                 waker.attach(&cc.egui_ctx);
                 crate::web::picker::listen_for_pastes(cc.egui_ctx.clone());
+                let repaint = cc.egui_ctx.clone();
+                crate::web::sfs::set_on_loaded(move || repaint.request_repaint());
                 cc.egui_ctx
                     .add_bytes_loader(std::sync::Arc::new(crate::web::images::PageFiles));
                 let app = Rc::new(RefCell::new(make_app(&cc.egui_ctx, &waker)?));

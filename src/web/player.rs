@@ -41,6 +41,8 @@ pub struct Player {
     ended_seen: bool,
     /// Whether the clip's failure has been told, so it is told once.
     failure_seen: bool,
+    /// A clip still on its way from storage, which starts when it lands.
+    fetching: Option<(String, std::path::PathBuf)>,
 }
 
 /// A position or length from the element, which says NaN or infinity until it knows.
@@ -61,6 +63,7 @@ impl Player {
             finished: None,
             ended_seen: false,
             failure_seen: false,
+            fetching: None,
         }
     }
 
@@ -125,6 +128,21 @@ impl Player {
     }
 
     pub fn toggle(&mut self, message: &str, path: &Path) -> Result<(), String> {
+        if self
+            .fetching
+            .as_ref()
+            .is_some_and(|(wanted, _)| wanted == message)
+        {
+            self.fetching = None;
+            return Ok(());
+        }
+        if !crate::web::sfs::is_loaded(path) {
+            self.clip = None;
+            crate::web::sfs::request_load(path);
+            self.fetching = Some((message.to_owned(), path.to_owned()));
+            self.waker.wake();
+            return Ok(());
+        }
         let same = self
             .clip
             .as_ref()
@@ -138,6 +156,9 @@ impl Player {
     }
 
     pub fn seek(&mut self, message: &str, path: &Path, fraction: f32) -> Result<(), String> {
+        if !crate::web::sfs::is_loaded(path) {
+            return self.toggle(message, path);
+        }
         if self
             .clip
             .as_ref()
@@ -159,10 +180,14 @@ impl Player {
 
     pub fn stop(&mut self) {
         self.clip = None;
+        self.fetching = None;
     }
 
     pub fn current(&self) -> Option<&str> {
-        self.clip.as_ref().map(|clip| clip.message.as_str())
+        self.fetching
+            .as_ref()
+            .map(|(message, _)| message.as_str())
+            .or_else(|| self.clip.as_ref().map(|clip| clip.message.as_str()))
     }
 
     pub fn toggle_current(&mut self) -> Result<(), String> {
@@ -203,6 +228,16 @@ impl Player {
             position: Duration::ZERO,
             total: Duration::ZERO,
         };
+        if self
+            .fetching
+            .as_ref()
+            .is_some_and(|(wanted, _)| wanted == message)
+        {
+            return Status {
+                state: State::Loading,
+                ..idle
+            };
+        }
         let Some(clip) = self.clip.as_ref().filter(|clip| clip.message == message) else {
             return idle;
         };
@@ -235,6 +270,12 @@ impl Player {
     }
 
     pub fn poll(&mut self) -> Result<(), String> {
+        if let Some((message, path)) = self
+            .fetching
+            .take_if(|(_, path)| crate::web::sfs::is_loaded(path))
+        {
+            return self.toggle(&message, &path);
+        }
         let Some(clip) = &self.clip else {
             return Ok(());
         };

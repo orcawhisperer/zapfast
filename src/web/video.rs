@@ -135,6 +135,8 @@ pub struct Player {
     seen: Cell<Instant>,
     side: u32,
     speed: f32,
+    /// A video still on its way from storage, which starts when it lands.
+    fetching: Option<(String, PathBuf)>,
 }
 
 impl Player {
@@ -153,6 +155,7 @@ impl Player {
             seen: Cell::new(Instant::now()),
             side: SIDE,
             speed: 1.0,
+            fetching: None,
         }
     }
 
@@ -223,6 +226,21 @@ impl Player {
     }
 
     pub fn toggle(&mut self, message: &str, path: &Path) {
+        if self
+            .fetching
+            .as_ref()
+            .is_some_and(|(wanted, _)| wanted == message)
+        {
+            self.fetching = None;
+            return;
+        }
+        if !crate::web::sfs::is_loaded(path) {
+            self.session = None;
+            crate::web::sfs::request_load(path);
+            self.fetching = Some((message.to_owned(), path.to_owned()));
+            self.waker.wake();
+            return;
+        }
         let same = self
             .session
             .as_ref()
@@ -281,6 +299,7 @@ impl Player {
 
     pub fn stop(&mut self) {
         self.session = None;
+        self.fetching = None;
     }
 
     pub fn is_active(&self) -> bool {
@@ -331,6 +350,12 @@ impl Player {
 
     /// Copies a new picture to its texture, and pauses a video no longer on screen.
     pub fn poll(&mut self, ctx: &egui::Context) -> Option<Notice> {
+        if let Some((message, path)) = self
+            .fetching
+            .take_if(|(_, path)| crate::web::sfs::is_loaded(path))
+        {
+            self.toggle(&message, &path);
+        }
         let side = self.side;
         let unseen = self.seen.get().elapsed() > UNSEEN;
         let session = self.session.as_mut()?;

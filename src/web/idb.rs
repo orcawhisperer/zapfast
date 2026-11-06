@@ -11,9 +11,13 @@ use web_sys::{
 };
 
 const NAME: &str = "zapfast";
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 pub const FILES: &str = "files";
 pub const KEYS: &str = "keys";
+/// Encrypted media, read one file at a time.
+pub const MEDIA: &str = "media";
+/// Each stored media file's length, read whole at the start.
+pub const MEDIA_INDEX: &str = "media-index";
 
 fn failed(what: &str) -> String {
     format!("the browser's storage refused to {what}")
@@ -94,7 +98,10 @@ pub async fn open() -> Result<IdbDatabase, String> {
             .and_then(|request| request.result().ok())
             .and_then(|result| result.dyn_into::<IdbDatabase>().ok());
         if let Some(database) = database {
-            for store in [FILES, KEYS] {
+            for store in [FILES, KEYS, MEDIA, MEDIA_INDEX] {
+                if database.object_store_names().contains(store) {
+                    continue;
+                }
                 if let Err(error) = database.create_object_store(store) {
                     log::error!("could not create browser storage: {error:?}");
                 }
@@ -139,6 +146,15 @@ pub async fn all(database: &IdbDatabase, name: &str) -> Result<Vec<(String, JsVa
         .zip(values.iter())
         .filter_map(|(key, value)| Some((key.as_string()?, value)))
         .collect())
+}
+
+/// One entry of a store, without reading the rest.
+pub async fn get(database: &IdbDatabase, name: &str, key: &str) -> Result<JsValue, String> {
+    let (_transaction, store) = store(database, name, IdbTransactionMode::Readonly)?;
+    let request = store
+        .get(&JsValue::from_str(key))
+        .map_err(|_| failed("read"))?;
+    answer(&request).await
 }
 
 /// One change to a store.

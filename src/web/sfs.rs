@@ -3,8 +3,14 @@
 //! Files live in memory on the page's one thread, with the behaviour the app
 //! relies on: a write needs its folder, a rename replaces, a folder lists its
 //! children. Once [`hydrate`] has run, changes are saved to IndexedDB in the
-//! background, except under the media cache, which WhatsApp can supply again and
-//! which would otherwise have to fit in memory at every start.
+//! background.
+//!
+//! Small files, such as settings, are all read at the start. Media under the cache
+//! would not fit in memory, so only an index of it is. A file's bytes are read and
+//! decrypted when first asked for, and the oldest go again when too many are held. A
+//! read of one not in memory fails with `WouldBlock` and starts fetching it, and
+//! [`set_on_loaded`] says when to look again. Code that can wait uses
+//! [`ensure_loaded`] first.
 //!
 //! Databases live in SQLite's own store (`web::sqlite`). They answer here too, so
 //! the code that checks for or deletes one needs no special case.
@@ -20,17 +26,60 @@ use std::rc::Rc;
 struct Store {
     files: BTreeMap<PathBuf, Rc<Vec<u8>>>,
     folders: BTreeSet<PathBuf>,
+    /// Media saved in IndexedDB, with its length, whether or not it is in memory.
+    kept: BTreeMap<PathBuf, u64>,
+    /// Media in memory, oldest use first.
+    held: Vec<PathBuf>,
+}
+
+/// How much media to hold in memory before letting the oldest go.
+const HOLD_BYTES: u64 = 256 * 1024 * 1024;
+
+impl Store {
+    /// Notes that `path` was just used, and lets go of what is over budget. A file
+    /// only leaves once it is saved, and the one just used never does.
+    fn hold(&mut self, path: &Path) {
+        self.held.retain(|held| held != path);
+        self.held.push(path.to_owned());
+        let mut total: u64 = self
+            .held
+            .iter()
+            .filter_map(|held| self.files.get(held))
+            .map(|bytes| bytes.len() as u64)
+            .sum();
+        let mut index = 0;
+        while total > HOLD_BYTES && index + 1 < self.held.len() {
+            let candidate = &self.held[index];
+            if self.kept.contains_key(candidate) {
+                if let Some(bytes) = self.files.remove(candidate) {
+                    total -= bytes.len() as u64;
+                }
+                self.held.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+    }
+
+    fn forget(&mut self, path: &Path) {
+        self.held.retain(|held| held != path);
+        self.kept.remove(path);
+    }
 }
 
 thread_local! {
     static STORE: RefCell<Store> = RefCell::new(Store::default());
     static SAVING: RefCell<Saving> = RefCell::new(Saving::default());
+    static LOADING: RefCell<BTreeSet<PathBuf>> = const { RefCell::new(BTreeSet::new()) };
+    static ON_LOADED: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
 }
 
 /// Changes waiting to reach IndexedDB, in order.
 #[derive(Default)]
 struct Saving {
     database: Option<web_sys::IdbDatabase>,
+    /// Where media is kept: encrypted, and read one file at a time.
+    media: PathBuf,
     /// The folder that is never saved.
     unsaved: PathBuf,
     waiting: Vec<Change>,
@@ -54,6 +103,10 @@ fn key_of(path: &Path, folder: bool) -> String {
     key
 }
 
+fn is_media(path: &Path) -> bool {
+    SAVING.with_borrow(|saving| saving.database.is_some() && path.starts_with(&saving.media))
+}
+
 /// Queues a change for IndexedDB and starts saving if nothing is.
 fn save(change: Change) {
     let start = SAVING.with_borrow_mut(|saving| {
@@ -71,6 +124,54 @@ fn save(change: Change) {
     }
 }
 
+/// Encrypts and stores one media file, unless it has changed or gone since.
+async fn save_media(database: &web_sys::IdbDatabase, path: &Path, bytes: Rc<Vec<u8>>) {
+    use crate::web::idb::{self, Change as Stored};
+    let current = || {
+        with(|store| {
+            store
+                .files
+                .get(path)
+                .is_some_and(|now| Rc::ptr_eq(now, &bytes))
+        })
+    };
+    if !current() {
+        return;
+    }
+    let Ok(sealed) = crate::web::keys::seal(&bytes).await else {
+        log::warn!("could not encrypt a file for the browser's storage");
+        return;
+    };
+    let key = key_of(path, false);
+    let saved = idb::apply(
+        database,
+        idb::MEDIA,
+        vec![Stored::Put(key.clone(), idb::value_of(&sealed))],
+    )
+    .await
+    .and(
+        idb::apply(
+            database,
+            idb::MEDIA_INDEX,
+            vec![Stored::Put(
+                key,
+                wasm_bindgen::JsValue::from_f64(bytes.len() as f64),
+            )],
+        )
+        .await,
+    );
+    match saved {
+        // Now it can leave memory, and be found again after a reload.
+        Ok(()) if current() => with(|store| {
+            store.kept.insert(path.to_owned(), bytes.len() as u64);
+            store.hold(path);
+        }),
+        Ok(()) => {}
+        // Most likely the browser's quota. The file lasts as long as the page.
+        Err(_) => log::warn!("a file did not fit in the browser's storage"),
+    }
+}
+
 async fn save_waiting() {
     use crate::web::idb::{self, Change as Stored};
     loop {
@@ -81,32 +182,57 @@ async fn save_waiting() {
             SAVING.with_borrow_mut(|saving| saving.running = false);
             return;
         };
-        let changes = batch
-            .into_iter()
-            .flat_map(|change| match change {
+        let mut small = Vec::new();
+        let mut media = Vec::new();
+        let mut gone = Vec::new();
+        for change in batch {
+            match change {
+                Change::File(path, bytes) if is_media(&path) => media.push((path, bytes)),
                 Change::File(path, bytes) => {
-                    vec![Stored::Put(key_of(&path, false), idb::value_of(&bytes))]
+                    small.push(Stored::Put(key_of(&path, false), idb::value_of(&bytes)));
                 }
-                Change::Folder(path) => vec![Stored::Put(
+                Change::Folder(path) => small.push(Stored::Put(
                     key_of(&path, true),
                     wasm_bindgen::JsValue::TRUE,
-                )],
-                Change::Gone(path) => vec![
-                    Stored::Delete(key_of(&path, false)),
-                    Stored::Delete(key_of(&path, true)),
-                ],
-            })
-            .collect();
-        if idb::apply(&database, idb::FILES, changes).await.is_err() {
+                )),
+                Change::Gone(path) => {
+                    let key = key_of(&path, false);
+                    gone.push(key.clone());
+                    small.push(Stored::Delete(key));
+                    small.push(Stored::Delete(key_of(&path, true)));
+                }
+            }
+        }
+        if !small.is_empty() && idb::apply(&database, idb::FILES, small).await.is_err() {
             log::warn!("a change did not reach the browser's storage");
+        }
+        if !gone.is_empty() {
+            for store in [idb::MEDIA, idb::MEDIA_INDEX] {
+                let deletions = gone.iter().cloned().map(Stored::Delete).collect();
+                if idb::apply(&database, store, deletions).await.is_err() {
+                    log::warn!("a removed file stayed in the browser's storage");
+                }
+            }
+        }
+        for (path, bytes) in media {
+            save_media(&database, &path, bytes).await;
         }
     }
 }
 
-/// Fills the store from IndexedDB, then starts saving changes to it. Everything
-/// under `unsaved` stays in memory only.
-pub async fn hydrate(database: web_sys::IdbDatabase, unsaved: PathBuf) -> Result<()> {
-    let stored = crate::web::idb::all(&database, crate::web::idb::FILES)
+/// Fills the store from IndexedDB, then starts saving changes to it. Files under
+/// `media` are read as they are needed, and everything under `unsaved` stays in
+/// memory only.
+pub async fn hydrate(
+    database: web_sys::IdbDatabase,
+    media: PathBuf,
+    unsaved: PathBuf,
+) -> Result<()> {
+    use crate::web::idb;
+    let stored = idb::all(&database, idb::FILES)
+        .await
+        .map_err(Error::other)?;
+    let index = idb::all(&database, idb::MEDIA_INDEX)
         .await
         .map_err(Error::other)?;
     with(|store| {
@@ -121,12 +247,85 @@ pub async fn hydrate(database: web_sys::IdbDatabase, unsaved: PathBuf) -> Result
                 }
             }
         }
+        for (key, length) in index {
+            store
+                .kept
+                .insert(PathBuf::from(key), length.as_f64().unwrap_or(0.0) as u64);
+        }
     });
     SAVING.with_borrow_mut(|saving| {
         saving.database = Some(database);
+        saving.media = media;
         saving.unsaved = unsaved;
     });
     Ok(())
+}
+
+/// Sets what to call when a file fetched in the background has arrived.
+pub fn set_on_loaded(hook: impl Fn() + 'static) {
+    ON_LOADED.with_borrow_mut(|slot| *slot = Some(Box::new(hook)));
+}
+
+/// Whether reading `path` would answer at once.
+pub fn is_loaded(path: impl AsRef<Path>) -> bool {
+    let path = clean(path.as_ref());
+    with(|store| store.files.contains_key(&path) || !store.kept.contains_key(&path))
+}
+
+/// Brings a kept file into memory. A file that will not open is forgotten, so it
+/// reads as missing and the app offers to download it again.
+pub async fn ensure_loaded(path: impl AsRef<Path>) {
+    use crate::web::idb;
+    let path = clean(path.as_ref());
+    if with(|store| store.files.contains_key(&path) || !store.kept.contains_key(&path)) {
+        return;
+    }
+    let Some(database) = SAVING.with_borrow(|saving| saving.database.clone()) else {
+        return;
+    };
+    let key = key_of(&path, false);
+    let opened = match idb::get(&database, idb::MEDIA, &key).await {
+        Ok(stored) if !stored.is_undefined() => {
+            crate::web::keys::open(&js_sys::Uint8Array::new(&stored).to_vec())
+                .await
+                .ok()
+        }
+        _ => None,
+    };
+    with(|store| match opened {
+        Some(bytes) => {
+            store.files.entry(path.clone()).or_insert(Rc::new(bytes));
+            store.hold(&path);
+        }
+        None => {
+            log::warn!("a stored file could not be read back");
+            store.forget(&path);
+        }
+    });
+}
+
+/// Fetches a kept file in the background, once however often it is asked for.
+pub fn request_load(path: impl AsRef<Path>) {
+    let path = clean(path.as_ref());
+    if !LOADING.with_borrow_mut(|loading| loading.insert(path.clone())) {
+        return;
+    }
+    wasm_bindgen_futures::spawn_local(async move {
+        ensure_loaded(&path).await;
+        LOADING.with_borrow_mut(|loading| {
+            loading.remove(&path);
+        });
+        ON_LOADED.with_borrow(|hook| {
+            if let Some(hook) = hook {
+                hook();
+            }
+        });
+    });
+}
+
+fn not_here_yet(path: &Path) -> Error {
+    request_load(path);
+    Error::new(ErrorKind::WouldBlock, "the file is on its way from storage")
 }
 
 fn is_database(path: &Path) -> bool {
@@ -165,7 +364,14 @@ impl Store {
     fn beneath(&self, path: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
         let under = |candidate: &&PathBuf| candidate.starts_with(path) && *candidate != path;
         (
-            self.files.keys().filter(under).cloned().collect(),
+            self.files
+                .keys()
+                .chain(self.kept.keys())
+                .filter(under)
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect(),
             self.folders.iter().filter(under).cloned().collect(),
         )
     }
@@ -177,7 +383,18 @@ fn with<T>(act: impl FnOnce(&mut Store) -> T) -> T {
 
 pub fn read(path: impl AsRef<Path>) -> Result<Vec<u8>> {
     let path = clean(path.as_ref());
-    with(|store| store.files.get(&path).map(|bytes| bytes.to_vec())).ok_or_else(missing)
+    let found = with(|store| {
+        let found = store.files.get(&path).map(|bytes| bytes.to_vec());
+        if found.is_some() && store.kept.contains_key(&path) {
+            store.hold(&path);
+        }
+        found
+    });
+    match found {
+        Some(bytes) => Ok(bytes),
+        None if with(|store| store.kept.contains_key(&path)) => Err(not_here_yet(&path)),
+        None => Err(missing()),
+    }
 }
 
 pub fn read_to_string(path: impl AsRef<Path>) -> Result<String> {
@@ -194,6 +411,11 @@ fn put(path: &Path, bytes: Vec<u8>) -> Result<()> {
         }
         let bytes = Rc::new(bytes);
         store.files.insert(path.to_owned(), bytes.clone());
+        // Held until saved, under what the store knows of it.
+        if is_media(path) {
+            store.kept.remove(path);
+            store.hold(path);
+        }
         save(Change::File(path.to_owned(), bytes));
         Ok(())
     })
@@ -238,7 +460,15 @@ pub fn remove_file(path: impl AsRef<Path>) -> Result<()> {
     if is_database(&path) {
         return crate::web::sqlite::delete(&path.to_string_lossy());
     }
-    with(|store| store.files.remove(&path).map(|_| ())).ok_or_else(missing)?;
+    let found = with(|store| {
+        let kept = store.kept.contains_key(&path);
+        let held = store.files.remove(&path).is_some();
+        store.forget(&path);
+        kept || held
+    });
+    if !found {
+        return Err(missing());
+    }
     save(Change::Gone(path));
     Ok(())
 }
@@ -252,6 +482,7 @@ pub fn remove_dir_all(path: impl AsRef<Path>) -> Result<()> {
         let (files, folders) = store.beneath(&path);
         for file in files {
             store.files.remove(&file);
+            store.forget(&file);
             save(Change::Gone(file));
         }
         for folder in folders {
@@ -280,7 +511,11 @@ pub fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
         if !store.parent_exists(&to) {
             return Err(missing());
         }
+        if store.kept.contains_key(&from) && !store.files.contains_key(&from) {
+            return Err(not_here_yet(&from));
+        }
         if let Some(bytes) = store.files.remove(&from) {
+            store.forget(&from);
             store.files.insert(to.clone(), bytes.clone());
             save(Change::Gone(from));
             save(Change::File(to, bytes));
@@ -418,8 +653,10 @@ pub fn metadata(path: impl AsRef<Path>) -> Result<Metadata> {
         store
             .files
             .get(&path)
-            .map(|bytes| Metadata {
-                length: bytes.len() as u64,
+            .map(|bytes| bytes.len() as u64)
+            .or_else(|| store.kept.get(&path).copied())
+            .map(|length| Metadata {
+                length,
                 folder: false,
             })
             .ok_or_else(missing)
@@ -551,6 +788,16 @@ impl OpenOptions {
         let path = clean(path.as_ref());
         let existing = with(|store| store.files.get(&path).cloned());
         let is_folder = with(|store| store.is_folder(&path));
+        // Replacing a file needs nothing of the old one; anything else does.
+        if existing.is_none()
+            && !(self.truncate && (self.write || self.append))
+            && with(|store| store.kept.contains_key(&path))
+        {
+            if self.create_new {
+                return Err(Error::new(ErrorKind::AlreadyExists, "already there"));
+            }
+            return Err(not_here_yet(&path));
+        }
         if is_folder {
             return Ok(File {
                 path,
