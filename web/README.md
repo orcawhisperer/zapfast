@@ -54,7 +54,10 @@ Without one, the app asks for a key in its settings.
 - Voice calls, with WhatsApp's own codec, which is pure Rust. The media reaches the relay
   through an `RTCPeerConnection` given a written SDP answer (`src/relay_answer.rs`), whose
   certificate fingerprint is a constant: if WhatsApp ever changes it, calls stop connecting
-  here alone. The browser cancels the echo, and asks for the microphone when a call starts.
+  here alone. The browser cancels the echo, for which the microphone and speaker share one audio
+  context, and it asks for the microphone when a call starts. The call runs on the page's thread,
+  so a page held up by other work delays the sound. The speaker holds a lead on the audio thread
+  and grows it after running dry, and the console's `[CALL] speaker` lines say how that went.
   A peer's audio in plain Opus cannot be decoded, as that needs libopus.
 - Video in a call, through WebCodecs and the same rate control as the desktop's. A browser
   without H.264 in WebCodecs goes on without the picture it cannot make or show, and says so

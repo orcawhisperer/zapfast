@@ -2,17 +2,18 @@
 //! the browser's audio thread and posts it to the page, so a busy page delays the sound
 //! but loses none of it.
 
+use js_sys::Reflect;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    AudioContext, AudioWorkletNode, Event, MediaStream, MediaStreamConstraints, MediaStreamTrack,
-    MessageEvent,
+    AudioContext, AudioWorkletNode, Event, MediaStream, MediaStreamAudioSourceNode,
+    MediaStreamConstraints, MediaStreamTrack, MessageEvent,
 };
 
 /// Mixes what it hears to mono and posts it every 50 ms, one loudness bar's worth.
 /// It writes nothing to its output, so joining the speakers plays nothing back.
-const WORKLET: &str = r#"
+pub(crate) const WORKLET: &str = r#"
 registerProcessor("zapfast-microphone", class extends AudioWorkletProcessor {
     size = Math.max(1, Math.round(sampleRate / 20));
     held = new Float32Array(this.size);
@@ -90,6 +91,9 @@ pub(crate) fn release(stream: &MediaStream) {
 pub struct Capture {
     stream: MediaStream,
     context: AudioContext,
+    /// Whether the context is this capture's alone, rather than shared with a speaker.
+    own_context: bool,
+    source: MediaStreamAudioSourceNode,
     node: AudioWorkletNode,
     _heard: Closure<dyn FnMut(MessageEvent)>,
     _ended: Closure<dyn FnMut(Event)>,
@@ -100,6 +104,19 @@ impl Capture {
     pub fn rate(&self) -> u32 {
         self.context.sample_rate() as u32
     }
+
+    /// Whether the browser says it is cancelling echo on this microphone.
+    pub fn cancels_echo(&self) -> Option<bool> {
+        let track = self.stream.get_audio_tracks().get(0);
+        let settings: js_sys::Function = Reflect::get(&track, &"getSettings".into())
+            .ok()?
+            .dyn_into()
+            .ok()?;
+        let settings = settings.call0(&track).ok()?;
+        Reflect::get(&settings, &"echoCancellation".into())
+            .ok()?
+            .as_bool()
+    }
 }
 
 impl Drop for Capture {
@@ -107,23 +124,59 @@ impl Drop for Capture {
         if let Ok(port) = self.node.port() {
             port.set_onmessage(None);
         }
+        let _ = self.source.disconnect();
+        let _ = self.node.disconnect();
         release(&self.stream);
-        let _ = self.context.close();
+        if self.own_context {
+            let _ = self.context.close();
+        }
     }
 }
 
-/// Opens the microphone under `constraints`. `heard` gets 50 ms of mono samples at a
-/// time, and `ended` says the microphone was unplugged or its permission taken back.
+/// Opens the microphone under `constraints`, in a context of its own. `heard` gets 50 ms of mono
+/// samples at a time, and `ended` says the microphone was unplugged or its permission taken back.
 pub async fn open(
     constraints: &JsValue,
-    mut heard: impl FnMut(Vec<f32>) + 'static,
-    mut ended: impl FnMut() + 'static,
+    heard: impl FnMut(Vec<f32>) + 'static,
+    ended: impl FnMut() + 'static,
 ) -> Result<Capture, JsValue> {
     let stream = stream(constraints).await?;
     // A stream given up on below must still be let go.
-    let attached = attach().await;
-    let (context, node) = match attached {
-        Ok(attached) => attached,
+    match own_context().await {
+        Ok(context) => joined(stream, context, true, heard, ended),
+        Err(error) => {
+            release(&stream);
+            Err(error)
+        }
+    }
+}
+
+/// Opens the microphone in `context`, which already has [`WORKLET`]. A call's speaker plays in the
+/// same one, as a browser can only cancel the echo of what it plays beside the microphone.
+pub async fn open_in(
+    context: &AudioContext,
+    constraints: &JsValue,
+    heard: impl FnMut(Vec<f32>) + 'static,
+    ended: impl FnMut() + 'static,
+) -> Result<Capture, JsValue> {
+    let stream = stream(constraints).await?;
+    joined(stream, context.clone(), false, heard, ended)
+}
+
+fn joined(
+    stream: MediaStream,
+    context: AudioContext,
+    own_context: bool,
+    mut heard: impl FnMut(Vec<f32>) + 'static,
+    mut ended: impl FnMut() + 'static,
+) -> Result<Capture, JsValue> {
+    let built = (|| {
+        let node = AudioWorkletNode::new(&context, "zapfast-microphone")?;
+        let source = context.create_media_stream_source(&stream)?;
+        Ok::<_, JsValue>((node, source))
+    })();
+    let (node, source) = match built {
+        Ok(built) => built,
         Err(error) => {
             release(&stream);
             return Err(error);
@@ -136,6 +189,8 @@ pub async fn open(
     let capture = Capture {
         stream,
         context,
+        own_context,
+        source,
         node,
         _heard: heard,
         _ended: ended,
@@ -149,10 +204,7 @@ pub async fn open(
             track.set_onended(Some(capture._ended.as_ref().unchecked_ref()));
         }
     }
-    capture
-        .context
-        .create_media_stream_source(&capture.stream)?
-        .connect_with_audio_node(&capture.node)?;
+    capture.source.connect_with_audio_node(&capture.node)?;
     // Silent, but a browser may only run a node that leads to its speakers.
     capture
         .node
@@ -160,7 +212,7 @@ pub async fn open(
     Ok(capture)
 }
 
-async fn attach() -> Result<(AudioContext, AudioWorkletNode), JsValue> {
+async fn own_context() -> Result<AudioContext, JsValue> {
     // The browser's rate, as a browser refuses to join a stream to a context at another.
     let context = AudioContext::new()?;
     let url = worklet_url(WORKLET)?;
@@ -169,6 +221,5 @@ async fn attach() -> Result<(AudioContext, AudioWorkletNode), JsValue> {
     loaded?;
     // A context made after the wait for permission may have lost the click.
     JsFuture::from(context.resume()?).await?;
-    let node = AudioWorkletNode::new(&context, "zapfast-microphone")?;
-    Ok((context, node))
+    Ok(context)
 }
