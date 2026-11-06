@@ -2647,6 +2647,12 @@ impl App {
     }
 
     /// Initializes a newly created window.
+    /// Connects a demo's own waker to its window, which the shell does elsewhere.
+    #[cfg(all(feature = "demo", target_arch = "wasm32"))]
+    pub(crate) fn attach_waker(&self, ctx: &egui::Context) {
+        self.waker.attach(ctx);
+    }
+
     pub fn attach(&mut self, ctx: &egui::Context) {
         // Texture handles belong to the window's egui context. Keep the
         // underlying pictures and recreate handles for the new window.

@@ -102,7 +102,11 @@ pub fn speed_label(speed: f32) -> String {
 
 type Decoded = Arc<Mutex<Option<Result<Vec<f32>, String>>>>;
 
+#[cfg(target_arch = "wasm32")]
+pub use crate::web::player::Player;
+
 /// Plays one clip at a time through the default output device.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Player {
     waker: Waker,
     output: Option<(Output, rodio::Player)>,
@@ -160,6 +164,7 @@ struct Decoding {
     slot: Decoded,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Player {
     pub fn new(waker: Waker) -> Self {
         Self {
