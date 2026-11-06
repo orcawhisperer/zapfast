@@ -7602,7 +7602,9 @@ fn context_menu(
                         name: attachment_name(&message.content, path),
                     });
                 }
-                if let Some(folder) = path.parent()
+                // A browser has its own files, and no folder of ours to show.
+                if !cfg!(target_arch = "wasm32")
+                    && let Some(folder) = path.parent()
                     && widgets::menu_item(
                         ui,
                         &palette,

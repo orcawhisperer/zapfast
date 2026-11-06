@@ -17,6 +17,11 @@ use super::widgets;
 /// The settings search field, which Ctrl+F focuses on this page.
 pub const SEARCH_ID: &str = "settings-search";
 
+/// Whether the settings about the computer itself apply. In a browser there is no
+/// window to keep running, no updates to fetch, no fonts or proxy of our own to
+/// choose, and no folders to open: the browser has all of those.
+const ON_THE_DESKTOP: bool = !cfg!(target_arch = "wasm32");
+
 /// A settings string with its English source, so the search finds a
 /// translated setting by either wording.
 #[derive(Clone, Debug, Default)]
@@ -351,14 +356,16 @@ fn sections(app: &App) -> Vec<Section> {
         Text::default()
     };
     appearance.row(translated(locale, "Theme"), detail, theme_picker);
-    appearance.row(
-        translated(locale, "Font"),
-        translated(
-            locale,
-            "System is your desktop's interface font. Inter looks the same on every computer.",
-        ),
-        font_picker,
-    );
+    if ON_THE_DESKTOP {
+        appearance.row(
+            translated(locale, "Font"),
+            translated(
+                locale,
+                "System is your desktop's interface font. Inter looks the same on every computer.",
+            ),
+            font_picker,
+        );
+    }
     appearance.row(
         translated(locale, "Wallpaper"),
         Text::default(),
@@ -666,11 +673,13 @@ fn sections(app: &App) -> Vec<Section> {
     }
 
     let mut system = Section::new(translated(locale, "System"));
-    system.toggle(
-        translated(locale, "Keep running when the window closes"),
-        keyed(translated(locale, "Quit from the tray or with Ctrl+Q.")),
-        |settings| &mut settings.keep_running_in_background,
-    );
+    if ON_THE_DESKTOP {
+        system.toggle(
+            translated(locale, "Keep running when the window closes"),
+            keyed(translated(locale, "Quit from the tray or with Ctrl+Q.")),
+            |settings| &mut settings.keep_running_in_background,
+        );
+    }
     if app.start_with_system.is_some() {
         system.row(
             translated(locale, "Start at login"),
@@ -696,61 +705,63 @@ fn sections(app: &App) -> Vec<Section> {
             },
         );
     }
-    system.toggle(
-        translated(locale, "Check for updates"),
-        translated(
-            locale,
-            "Asks GitHub once a day, sending only the ZapFast version.",
-        ),
-        |settings| &mut settings.check_for_updates,
-    );
-    system.toggle(
-        translated(locale, "Download updates automatically"),
-        translated(
-            locale,
-            "You still choose when to restart. Package managers and Flatpak update ZapFast themselves.",
-        ),
-        |settings| &mut settings.download_updates_automatically,
-    );
-    let environment = app
-        .settings
-        .proxy
-        .is_empty()
-        .then(crate::proxy::for_whatsapp)
-        .flatten();
-    let description = match environment {
-        Some(proxy) => {
-            let redacted = proxy.redacted();
-            let text = translated(locale, "Using {proxy} from the environment.");
-            Text {
-                shown: text.shown.replace("{proxy}", &redacted).into(),
-                source: text.source.replace("{proxy}", &redacted).into(),
-            }
-        }
-        None => translated(
-            locale,
-            "For WhatsApp, media, and updates. Empty uses ALL_PROXY or HTTPS_PROXY.",
-        ),
-    };
-    system.row(translated(locale, "Proxy"), description, move |ui, app| {
-        let id = egui::Id::new("settings-proxy-draft");
-        let mut draft = ui
-            .data(|data| data.get_temp::<String>(id))
-            .unwrap_or_else(|| app.settings.proxy.clone());
-        let response = ui.add(
-            egui::TextEdit::singleline(&mut draft)
-                .hint_text("socks5h://127.0.0.1:9050")
-                .font(theme::regular(13.0))
-                .text_color(palette.text)
-                .desired_width(220.0),
+    if ON_THE_DESKTOP {
+        system.toggle(
+            translated(locale, "Check for updates"),
+            translated(
+                locale,
+                "Asks GitHub once a day, sending only the ZapFast version.",
+            ),
+            |settings| &mut settings.check_for_updates,
         );
-        if response.lost_focus() {
-            app.actions.push(Action::SetProxy(draft.clone()));
-            ui.data_mut(|data| data.remove::<String>(id));
-        } else if response.has_focus() {
-            ui.data_mut(|data| data.insert_temp(id, draft));
-        }
-    });
+        system.toggle(
+            translated(locale, "Download updates automatically"),
+            translated(
+                locale,
+                "You still choose when to restart. Package managers and Flatpak update ZapFast themselves.",
+            ),
+            |settings| &mut settings.download_updates_automatically,
+        );
+        let environment = app
+            .settings
+            .proxy
+            .is_empty()
+            .then(crate::proxy::for_whatsapp)
+            .flatten();
+        let description = match environment {
+            Some(proxy) => {
+                let redacted = proxy.redacted();
+                let text = translated(locale, "Using {proxy} from the environment.");
+                Text {
+                    shown: text.shown.replace("{proxy}", &redacted).into(),
+                    source: text.source.replace("{proxy}", &redacted).into(),
+                }
+            }
+            None => translated(
+                locale,
+                "For WhatsApp, media, and updates. Empty uses ALL_PROXY or HTTPS_PROXY.",
+            ),
+        };
+        system.row(translated(locale, "Proxy"), description, move |ui, app| {
+            let id = egui::Id::new("settings-proxy-draft");
+            let mut draft = ui
+                .data(|data| data.get_temp::<String>(id))
+                .unwrap_or_else(|| app.settings.proxy.clone());
+            let response = ui.add(
+                egui::TextEdit::singleline(&mut draft)
+                    .hint_text("socks5h://127.0.0.1:9050")
+                    .font(theme::regular(13.0))
+                    .text_color(palette.text)
+                    .desired_width(220.0),
+            );
+            if response.lost_focus() {
+                app.actions.push(Action::SetProxy(draft.clone()));
+                ui.data_mut(|data| data.remove::<String>(id));
+            } else if response.has_focus() {
+                ui.data_mut(|data| data.insert_temp(id, draft));
+            }
+        });
+    }
     system.row(
         translated(locale, "GIPHY API key"),
         if crate::settings::BUILT_IN_GIPHY_KEY.is_some() {
@@ -794,62 +805,70 @@ fn sections(app: &App) -> Vec<Section> {
     );
 
     let mut files = Section::new(translated(locale, "Files"));
-    // The account on screen: each number keeps its own archive and media.
-    let state = app.account().dirs.state.clone();
-    let open_folder = crate::i18n::gettext(locale, "Open folder");
-    files.row(
-        translated(locale, "Message archive"),
-        app.account().dirs.archive_db().display().to_string(),
-        {
-            let open_folder = open_folder.clone();
+    if ON_THE_DESKTOP {
+        // The account on screen: each number keeps its own archive and media.
+        let state = app.account().dirs.state.clone();
+        let open_folder = crate::i18n::gettext(locale, "Open folder");
+        files.row(
+            translated(locale, "Message archive"),
+            app.account().dirs.archive_db().display().to_string(),
+            {
+                let open_folder = open_folder.clone();
+                move |ui, app| {
+                    if theme::soft_button(
+                        ui,
+                        &palette,
+                        Some(Icon::ExternalLink),
+                        &open_folder,
+                        false,
+                    )
+                    .clicked()
+                    {
+                        app.actions.push(Action::OpenFolder(state));
+                    }
+                }
+            },
+        );
+        let custom = app.settings.download_folder.clone();
+        let media = custom
+            .clone()
+            .unwrap_or_else(|| app.account().dirs.media_cache_dir());
+        files.row(
+            translated(locale, "Downloads"),
+            media.display().to_string(),
             move |ui, app| {
                 if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), &open_folder, false)
                     .clicked()
                 {
-                    app.actions.push(Action::OpenFolder(state));
+                    let _ = crate::platform::sfs::create_dir_all(&media);
+                    app.actions.push(Action::OpenFolder(media.clone()));
                 }
-            }
-        },
-    );
-    let custom = app.settings.download_folder.clone();
-    let media = custom
-        .clone()
-        .unwrap_or_else(|| app.account().dirs.media_cache_dir());
-    files.row(
-        translated(locale, "Downloads"),
-        media.display().to_string(),
-        move |ui, app| {
-            if theme::soft_button(ui, &palette, Some(Icon::ExternalLink), &open_folder, false)
-                .clicked()
-            {
-                let _ = crate::platform::sfs::create_dir_all(&media);
-                app.actions.push(Action::OpenFolder(media.clone()));
-            }
-            if theme::soft_button(
-                ui,
-                &palette,
-                None,
-                &crate::i18n::gettext(app.locale, "Change…"),
-                false,
-            )
-            .clicked()
-            {
-                app.actions.push(Action::PickDownloadFolder);
-            }
-            if custom.is_some()
-                && theme::soft_button(
+                if theme::soft_button(
                     ui,
                     &palette,
                     None,
-                    &crate::i18n::gettext(app.locale, "Use default"),
+                    &crate::i18n::gettext(app.locale, "Change…"),
                     false,
                 )
                 .clicked()
-            {
-                app.actions.push(Action::SetDownloadFolder(None));
-            }
-        },
-    );
+                {
+                    app.actions.push(Action::PickDownloadFolder);
+                }
+                if custom.is_some()
+                    && theme::soft_button(
+                        ui,
+                        &palette,
+                        None,
+                        &crate::i18n::gettext(app.locale, "Use default"),
+                        false,
+                    )
+                    .clicked()
+                {
+                    app.actions.push(Action::SetDownloadFolder(None));
+                }
+            },
+        );
+    }
     files.block(
         vec![
             translated(locale, "Storage used"),
@@ -862,24 +881,26 @@ fn sections(app: &App) -> Vec<Section> {
         ],
         storage_usage,
     );
-    let log = app.dirs.log_file();
-    files.row(
-        translated(locale, "Log"),
-        log.display().to_string(),
-        move |ui, app| {
-            if theme::soft_button(
-                ui,
-                &palette,
-                Some(Icon::FileText),
-                &crate::i18n::gettext(app.locale, "Open"),
-                false,
-            )
-            .clicked()
-            {
-                app.actions.push(Action::OpenLog(log));
-            }
-        },
-    );
+    if ON_THE_DESKTOP {
+        let log = app.dirs.log_file();
+        files.row(
+            translated(locale, "Log"),
+            log.display().to_string(),
+            move |ui, app| {
+                if theme::soft_button(
+                    ui,
+                    &palette,
+                    Some(Icon::FileText),
+                    &crate::i18n::gettext(app.locale, "Open"),
+                    false,
+                )
+                .clicked()
+                {
+                    app.actions.push(Action::OpenLog(log));
+                }
+            },
+        );
+    }
 
     let mut about_section = Section::new(translated(locale, "About"));
     about_section.block(
