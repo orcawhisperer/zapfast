@@ -20,5 +20,6 @@ pub mod tasks;
 pub mod time;
 pub mod tokio_fs;
 pub mod transport;
+pub mod video;
 
 pub use entry::start;

@@ -37,8 +37,8 @@ fn wants_demo() -> bool {
         })
 }
 
-/// A short tone for the sample voice messages, whose files the desktop's demo does
-/// not need: here they show that the player works without an account.
+/// A short tone and clips for the sample voice messages and videos, whose files the
+/// desktop's demo does not need: here they show the players work without an account.
 #[cfg(feature = "demo")]
 fn give_samples_a_voice(app: &mut App) {
     const RATE: u32 = 16_000;
@@ -63,16 +63,30 @@ fn give_samples_a_voice(app: &mut App) {
     wav.extend_from_slice(b"data");
     wav.extend_from_slice(&data_size.to_le_bytes());
     wav.extend(samples.flat_map(i16::to_le_bytes));
-    let path = app.dirs.media_cache_dir().join("sample-voice.wav");
-    if path
+    let voice = app.dirs.media_cache_dir().join("sample-voice.wav");
+    let film = app.dirs.media_cache_dir().join("sample-film.mp4");
+    let note = app.dirs.media_cache_dir().join("sample-note.mp4");
+    if voice
         .parent()
         .is_none_or(|folder| crate::web::sfs::create_dir_all(folder).is_ok())
-        && crate::web::sfs::write(&path, wav).is_ok()
+        && crate::web::sfs::write(&voice, wav).is_ok()
+        && crate::web::sfs::write(&film, include_bytes!("../../assets/demo/videos/launch.mp4"))
+            .is_ok()
+        && crate::web::sfs::write(&note, include_bytes!("../../assets/demo/videos/note.mp4"))
+            .is_ok()
     {
         for conversation in app.conversations.values_mut() {
             for message in &mut conversation.messages {
-                if let crate::model::Content::Audio { media, .. } = &mut message.content {
-                    media.path = Some(path.clone());
+                match &mut message.content {
+                    crate::model::Content::Audio { media, .. } => {
+                        media.path = Some(voice.clone());
+                    }
+                    crate::model::Content::Video {
+                        media, note: round, ..
+                    } => {
+                        media.path = Some(if *round { note.clone() } else { film.clone() });
+                    }
+                    _ => {}
                 }
             }
         }

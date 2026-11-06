@@ -381,6 +381,31 @@ fn start_decode(ctx: &egui::Context, inbox: &Inbox, path: &Path, all: bool) -> S
     let ctx = ctx.clone();
     let inbox = inbox.clone();
     let limit = if all { MAX_FRAMES } else { 1 };
+    // A page cannot decode H.264 itself, and its <video> answers only later.
+    #[cfg(target_arch = "wasm32")]
+    if !matches!(
+        file.extension()
+            .map(|kind| kind.to_string_lossy().to_ascii_lowercase())
+            .as_deref(),
+        Some("jpg" | "jpeg" | "png" | "webp" | "gif" | "was")
+    ) {
+        wasm_bindgen_futures::spawn_local(async move {
+            let _slot = slot;
+            const STEP: Duration = Duration::from_millis(66);
+            let decoded = crate::web::video::stepped_frames(&file, limit, STEP, MAX_WIDTH)
+                .await
+                .map(|frames| Decoded {
+                    frames: frames.into_iter().map(|frame| (frame, STEP)).collect(),
+                });
+            inbox
+                .0
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push((file, decoded, all));
+            ctx.request_repaint();
+        });
+        return Start::Started;
+    }
     let spawned = crate::platform::run_detached("animation-decode", move || {
         let _slot = slot;
         // Convert decoder panics to failed results.

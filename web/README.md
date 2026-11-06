@@ -39,7 +39,9 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
   account yet, and browsers that only offer them through a service worker, such as
   on Android, show none.
 - Installing as an app, and starting without a network on the archive already held.
-- Playing voice messages, through the browser's own audio element.
+- Playing voice messages and videos, through the browser's own audio and video
+  elements. Which formats play depends on the browser. GIF-style clips step through
+  the same element, which has not been tried on a real one yet.
 - Storage that survives a reload, kept to one tab at a time. The archive and the
   device store are encrypted. Each has a random key, wrapped by a master key the
   browser holds as non-extractable.
@@ -62,7 +64,8 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 
 - **Colour emoji in plain labels.** Messages and chat names have them, drawn by the
   browser. Menus and tooltips keep the fonts' monochrome glyphs.
-- **Video, and recording voice.** The H.264 and Opus stand-ins always refuse.
+- **Recording voice messages, and a call's camera and sound.** The Opus and H.264
+  stand-ins always refuse.
 - **GIF search and Signal sticker packs.** They still use the blocking client,
   which always fails in a page, rather than fetch. Signal's servers also refuse
   requests from a page.

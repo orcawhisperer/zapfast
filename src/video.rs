@@ -667,7 +667,11 @@ impl Session {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+pub use crate::web::video::Player;
+
 /// Plays one video at a time inside its message.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Player {
     waker: Waker,
     session: Option<Session>,
@@ -684,6 +688,7 @@ pub struct Player {
     speed: f32,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Player {
     /// Re-upload the current frame when the player moves to a new window.
     pub fn attach(&mut self, ctx: &egui::Context) {
