@@ -87,12 +87,23 @@ pub(crate) fn release(stream: &MediaStream) {
     }
 }
 
+/// Whether the browser says it is cancelling echo on this stream.
+pub(crate) fn cancels_echo(stream: &MediaStream) -> Option<bool> {
+    let track = stream.get_audio_tracks().get(0);
+    let settings: js_sys::Function = Reflect::get(&track, &"getSettings".into())
+        .ok()?
+        .dyn_into()
+        .ok()?;
+    let settings = settings.call0(&track).ok()?;
+    Reflect::get(&settings, &"echoCancellation".into())
+        .ok()?
+        .as_bool()
+}
+
 /// An open microphone. Dropping it lets the microphone go.
 pub struct Capture {
     stream: MediaStream,
     context: AudioContext,
-    /// Whether the context is this capture's alone, rather than shared with a speaker.
-    own_context: bool,
     source: MediaStreamAudioSourceNode,
     node: AudioWorkletNode,
     _heard: Closure<dyn FnMut(MessageEvent)>,
@@ -104,19 +115,6 @@ impl Capture {
     pub fn rate(&self) -> u32 {
         self.context.sample_rate() as u32
     }
-
-    /// Whether the browser says it is cancelling echo on this microphone.
-    pub fn cancels_echo(&self) -> Option<bool> {
-        let track = self.stream.get_audio_tracks().get(0);
-        let settings: js_sys::Function = Reflect::get(&track, &"getSettings".into())
-            .ok()?
-            .dyn_into()
-            .ok()?;
-        let settings = settings.call0(&track).ok()?;
-        Reflect::get(&settings, &"echoCancellation".into())
-            .ok()?
-            .as_bool()
-    }
 }
 
 impl Drop for Capture {
@@ -127,9 +125,7 @@ impl Drop for Capture {
         let _ = self.source.disconnect();
         let _ = self.node.disconnect();
         release(&self.stream);
-        if self.own_context {
-            let _ = self.context.close();
-        }
+        let _ = self.context.close();
     }
 }
 
@@ -143,7 +139,7 @@ pub async fn open(
     let stream = stream(constraints).await?;
     // A stream given up on below must still be let go.
     match own_context().await {
-        Ok(context) => joined(stream, context, true, heard, ended),
+        Ok(context) => joined(stream, context, heard, ended),
         Err(error) => {
             release(&stream);
             Err(error)
@@ -151,22 +147,9 @@ pub async fn open(
     }
 }
 
-/// Opens the microphone in `context`, which already has [`WORKLET`]. A call's speaker plays in the
-/// same one, as a browser can only cancel the echo of what it plays beside the microphone.
-pub async fn open_in(
-    context: &AudioContext,
-    constraints: &JsValue,
-    heard: impl FnMut(Vec<f32>) + 'static,
-    ended: impl FnMut() + 'static,
-) -> Result<Capture, JsValue> {
-    let stream = stream(constraints).await?;
-    joined(stream, context.clone(), false, heard, ended)
-}
-
 fn joined(
     stream: MediaStream,
     context: AudioContext,
-    own_context: bool,
     mut heard: impl FnMut(Vec<f32>) + 'static,
     mut ended: impl FnMut() + 'static,
 ) -> Result<Capture, JsValue> {
@@ -189,7 +172,6 @@ fn joined(
     let capture = Capture {
         stream,
         context,
-        own_context,
         source,
         node,
         _heard: heard,

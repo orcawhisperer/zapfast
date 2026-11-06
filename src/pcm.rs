@@ -54,6 +54,62 @@ fn to_i16(sample: f32) -> i16 {
     (sample.clamp(-1.0, 1.0) * f32::from(i16::MAX)) as i16
 }
 
+/// Which packets have been played, by their RTP sequence numbers. A data channel with no
+/// retransmissions or ordering hands packets over as they came, so some never come and a few come
+/// behind others.
+#[derive(Debug, Default)]
+pub struct PacketOrder {
+    next: Option<u16>,
+}
+
+impl PacketOrder {
+    /// A jump this far either way is not the network: the stream has started again.
+    const RESTART: i16 = 1_000;
+
+    /// Whether a packet still has a place: `None` if that place has gone by, else how many packets
+    /// were skipped to reach it.
+    pub fn admit(&mut self, sequence: u16) -> Option<u16> {
+        let Some(next) = self.next else {
+            self.next = Some(sequence.wrapping_add(1));
+            return Some(0);
+        };
+        let ahead = sequence.wrapping_sub(next) as i16;
+        if (-Self::RESTART..0).contains(&ahead) {
+            return None;
+        }
+        self.next = Some(sequence.wrapping_add(1));
+        Some(if ahead > 0 && ahead < Self::RESTART {
+            ahead as u16
+        } else {
+            0
+        })
+    }
+}
+
+/// What plays in place of a lost packet: the last sound backwards, fading out. Backwards it begins
+/// from the very sample the sound broke off on, at the same pitch and level, so it neither clicks
+/// nor leaves the hole a silence would. `last` becomes what was just made, for a second loss in a row.
+pub fn conceal_into(last: &mut Vec<i16>, filled: &mut Vec<i16>) {
+    let length = last.len().max(1) as f32;
+    filled.clear();
+    filled.extend(
+        last.iter()
+            .rev()
+            .enumerate()
+            .map(|(index, &sample)| (f32::from(sample) * (1.0 - index as f32 / length)) as i16),
+    );
+    last.clone_from(filled);
+}
+
+/// Brings in the first sound after a loss, which the concealment has faded out before.
+pub fn fade_in(samples: &mut [i16]) {
+    /// 3 ms at the rate of a call.
+    const LENGTH: usize = 48;
+    for (index, sample) in samples.iter_mut().take(LENGTH).enumerate() {
+        *sample = (f32::from(*sample) * index as f32 / LENGTH as f32) as i16;
+    }
+}
+
 /// A 16-bit mono WAV file.
 pub fn wav(samples: &[f32], rate: u32) -> Vec<u8> {
     let data_size = (samples.len() * 2) as u32;
@@ -135,6 +191,62 @@ mod tests {
     fn samples_past_full_scale_are_held_at_it() {
         let out = frames(16_000, 16_000, 2, &[vec![2.0, -2.0]]);
         assert_eq!(out, [vec![i16::MAX, -i16::MAX]]);
+    }
+
+    #[test]
+    fn packets_in_order_all_play() {
+        let mut order = PacketOrder::default();
+        for sequence in [65_534, 65_535, 0, 1] {
+            assert_eq!(order.admit(sequence), Some(0), "{sequence} follows on");
+        }
+    }
+
+    #[test]
+    fn a_skipped_packet_is_counted_and_one_behind_it_is_too_late() {
+        let mut order = PacketOrder::default();
+        assert_eq!(order.admit(10), Some(0));
+        assert_eq!(order.admit(13), Some(2), "11 and 12 did not come");
+        assert_eq!(order.admit(12), None, "13 has played");
+        assert_eq!(order.admit(13), None, "and a copy of it is no use");
+        assert_eq!(order.admit(14), Some(0));
+    }
+
+    #[test]
+    fn a_stream_that_starts_again_is_not_a_long_loss() {
+        let mut order = PacketOrder::default();
+        assert_eq!(order.admit(40_000), Some(0));
+        assert_eq!(order.admit(5), Some(0), "far behind is a new stream");
+        assert_eq!(order.admit(6), Some(0));
+        assert_eq!(order.admit(30_000), Some(0), "and so is far ahead");
+    }
+
+    #[test]
+    fn concealment_starts_where_the_sound_broke_off_and_fades_out() {
+        let mut last: Vec<i16> = (0..960).map(|index| 1_000 + index).collect();
+        let broke_off = *last.last().unwrap();
+        let mut filled = Vec::new();
+        conceal_into(&mut last, &mut filled);
+        assert_eq!(filled.len(), 960);
+        assert_eq!(filled[0], broke_off, "so nothing clicks");
+        assert!(filled[959].abs() < 5, "{}", filled[959]);
+        assert!(filled.windows(2).all(|pair| pair[1] <= pair[0]));
+        assert_eq!(last, filled, "a second loss carries on from this one");
+    }
+
+    #[test]
+    fn concealing_nothing_makes_nothing() {
+        let mut filled = vec![1];
+        conceal_into(&mut Vec::new(), &mut filled);
+        assert!(filled.is_empty());
+    }
+
+    #[test]
+    fn the_first_sound_after_a_loss_comes_in_from_nothing() {
+        let mut samples = vec![10_000_i16; 96];
+        fade_in(&mut samples);
+        assert_eq!(samples[0], 0);
+        assert!(samples.windows(2).all(|pair| pair[1] >= pair[0]));
+        assert_eq!(samples[48..], [10_000; 48]);
     }
 
     #[test]

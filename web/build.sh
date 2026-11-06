@@ -22,7 +22,14 @@ fi
 # wasm-bindgen reads the whole module into memory several times over, and debug
 # information is most of a development build. Function names stay for stack traces.
 export CARGO_PROFILE_DEV_STRIP=debuginfo
-cargo build --target wasm32-unknown-unknown --profile "$profile" \
+# A call's echo canceller and codec run on the page's one thread in real time. Unoptimized they take
+# most of it, so a development build still optimizes these.
+optimized=
+for crate in sonora sonora-aec3 sonora-agc2 sonora-common-audio sonora-fft sonora-ns sonora-simd wacore; do
+    optimized="$optimized --config profile.dev.package.$crate.opt-level=3"
+done
+# shellcheck disable=SC2086
+cargo build $optimized --target wasm32-unknown-unknown --profile "$profile" \
     --bin zapfast-web --features "$features"
 folder=$profile
 [ "$profile" = dev ] && folder=debug

@@ -1957,7 +1957,18 @@ impl Call {
         let (output, output_tx) = AudioOutput::spawn(speaker.clone(), &far_end);
 
         let voip = client.voip();
+        #[cfg(not(target_arch = "wasm32"))]
         let builder = voip.call(&peer).audio(mic_rx, output_tx);
+        // In a page a timer of the library's would lose sound whenever the page's thread is busy.
+        #[cfg(target_arch = "wasm32")]
+        let builder = {
+            let (source, sink) = crate::call_audio::whatsapp_codec(mic_rx, output_tx);
+            voip.call(&peer).encoded_audio(
+                whatsapp_rust::voip::AudioFormat::MLOW_16KHZ_60MS,
+                source,
+                sink,
+            )
+        };
         let placed = match &pipe {
             Some((pipeline, _)) => {
                 builder
@@ -2599,7 +2610,20 @@ impl Call {
         // From here the library owns the answer: if it fails, its own guard ends the call with the
         // peer, so there is no offer left for [`Call::abandon`] to refuse.
         self.incoming = None;
+        #[cfg(not(target_arch = "wasm32"))]
         let builder = voip.accept(&incoming).audio(mic_rx, output_tx);
+        // As when placing one. A group's call is mixed in the library, so it stays with samples.
+        #[cfg(target_arch = "wasm32")]
+        let builder = if self.group.is_some() {
+            voip.accept(&incoming).audio(mic_rx, output_tx)
+        } else {
+            let (source, sink) = crate::call_audio::whatsapp_codec(mic_rx, output_tx);
+            voip.accept(&incoming).encoded_audio(
+                whatsapp_rust::voip::AudioFormat::MLOW_16KHZ_60MS,
+                source,
+                sink,
+            )
+        };
         let accepted = match &pipe {
             Some((pipeline, _)) => {
                 builder
@@ -3300,6 +3324,11 @@ impl Call {
     /// stays fed and the peer never re-negotiates the transport.
     pub async fn set_muted(&mut self, muted: bool) -> Option<CallUpdate> {
         let handle = self.handle.clone()?;
+        // Muted before the peer is told, and unmuted only once they have been, as the library does.
+        #[cfg(target_arch = "wasm32")]
+        if muted && let Some(mic) = &self.mic {
+            mic.set_muted(true);
+        }
         match handle.set_muted(muted).await {
             Ok(()) => {}
             Err(error) if muted => log::warn!(
@@ -3308,6 +3337,10 @@ impl Call {
             Err(error) => log::warn!("[CALL] unmute failed, the microphone stays muted: {error}"),
         }
         let now = handle.is_muted();
+        #[cfg(target_arch = "wasm32")]
+        if let Some(mic) = &self.mic {
+            mic.set_muted(now);
+        }
         if now != muted {
             log::warn!("[CALL] mute state is {now} after asking for {muted}");
         }

@@ -52,13 +52,17 @@ Without one, the app asks for a key in its settings.
   a browser whose canvas encodes WebP.
 - Copying a picture to the clipboard, as a PNG.
 - Voice calls, with WhatsApp's own codec, which is pure Rust. The media reaches the relay
-  through an `RTCPeerConnection` given a written SDP answer (`src/relay_answer.rs`), whose
-  certificate fingerprint is a constant: if WhatsApp ever changes it, calls stop connecting
-  here alone. The browser cancels the echo, for which the microphone and speaker share one audio
-  context, and it asks for the microphone when a call starts. The call runs on the page's thread,
-  so a page held up by other work delays the sound. The speaker holds a lead on the audio thread
-  and grows it after running dry, and the console's `[CALL] speaker` lines say how that went.
-  A peer's audio in plain Opus cannot be decoded, as that needs libopus.
+  over a data channel that a written SDP answer sets up, so the relay's certificate
+  fingerprint is a constant: if WhatsApp ever changes it, calls stop connecting here alone.
+  One audio node runs the microphone and the speaker on the browser's audio thread. A one-to-one
+  call takes packets from the library and decodes them as they come, as the library's playout
+  timer loses sound whenever the page's thread is late; a group's call, mixed in the library,
+  still comes through that timer. The speaker holds a lead that grows after running dry and sheds
+  what it never needed. The echo is taken out by the desktop's tuned chain rather than the
+  browser's canceller, and a muted microphone goes out as the comfort-noise packet. All of this
+  runs on the page's thread, so it costs about 13% of it in a release build. The console's
+  `[CALL] speaker` and `[CALL] the peer's sound` lines say how a call went. A peer's audio in
+  plain Opus cannot be decoded, as that needs libopus, so such a call is refused.
 - Video in a call, through WebCodecs and the same rate control as the desktop's. A browser
   without H.264 in WebCodecs goes on without the picture it cannot make or show, and says so
   in the log. Each picture shown is copied out of a canvas, so large ones cost the page.
