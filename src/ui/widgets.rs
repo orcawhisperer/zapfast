@@ -954,6 +954,28 @@ pub fn menu_frame(palette: &Palette) -> egui::Frame {
         .shadow(palette.float_shadow())
 }
 
+/// A title with a spinner, in place of a list that is still on its way.
+pub fn loading_state(ui: &mut Ui, palette: &Palette, title: &str, body: &str) {
+    ui.add_space(48.0);
+    ui.vertical_centered(|ui| {
+        theme::progress(ui, 32.0, None, palette.accent);
+        ui.add_space(12.0);
+        theme::text(ui, title, theme::semibold(16.0), palette.text);
+        if !body.is_empty() {
+            ui.add_space(2.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(body)
+                        .font(theme::regular(13.5))
+                        .color(palette.secondary),
+                )
+                .wrap()
+                .selectable(false),
+            );
+        }
+    });
+}
+
 pub fn empty_state(ui: &mut Ui, palette: &Palette, icon: Icon, title: &str, body: &str) {
     ui.add_space(48.0);
     ui.vertical_centered(|ui| {

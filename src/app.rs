@@ -3860,6 +3860,7 @@ impl App {
                 }
             }
             Event::Chats(chats) => {
+                self.chats_loading = false;
                 for chat in &chats {
                     if chat.unread == 0 {
                         self.clear_chat_notifications(&chat.id);

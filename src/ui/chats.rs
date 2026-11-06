@@ -948,8 +948,18 @@ fn list(app: &mut App, ui: &mut egui::Ui) {
                 _ => "No groups",
             };
             (title, "Choose All to see every chat.")
-        } else if app.syncing {
-            ("Loading your chats", "Receiving history from your phone.")
+        } else if app.syncing || app.chats_loading {
+            widgets::loading_state(
+                ui,
+                &palette,
+                "Loading your chats",
+                if app.syncing {
+                    "Receiving history from your phone."
+                } else {
+                    ""
+                },
+            );
+            return;
         } else {
             (
                 "No chats yet",

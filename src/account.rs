@@ -28,6 +28,8 @@ pub struct Account {
     pub backend: Backend,
     pub link: LinkStatus,
     pub syncing: bool,
+    /// Whether the first list of chats is still on its way from the archive.
+    pub chats_loading: bool,
     pub sync_percent: Option<u32>,
     pub me: Option<String>,
     pub me_lid: Option<String>,
@@ -181,6 +183,7 @@ impl Account {
             backend,
             link: LinkStatus::Starting,
             syncing: false,
+            chats_loading: false,
             sync_percent: None,
             me: None,
             me_lid: None,
@@ -291,7 +294,9 @@ impl Account {
         };
         resolve_wallpaper_path(&dirs, &mut settings);
         let backend = Backend::spawn(dirs.clone(), waker.clone());
-        Ok(Self::new(id, dirs, settings, backend))
+        let mut account = Self::new(id, dirs, settings, backend);
+        account.chats_loading = true;
+        Ok(account)
     }
 
     pub fn detached(
