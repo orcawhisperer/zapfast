@@ -489,6 +489,7 @@ controls, to play it in the full-window viewer:
 Space plays and pauses, the arrows jump five seconds, M mutes, S changes the
 speed, and Escape closes the viewer and stops the video. The built-in player
 supports H.264 video in MP4 files; other formats open in your system player.
+GIFs carry a **GIF** label and play while the pointer is over them.
 
 Click a downloaded JPEG, PNG, or WebP photo to open it in the full-window
 viewer, with zoom (wheel, Ctrl+wheel, or a pinch, and a double-click between

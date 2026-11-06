@@ -10530,13 +10530,9 @@ fn video(
         PICTURE_HEIGHT.min(limit * 1.3),
     );
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let moving = view.animate && response.hovered();
     let playing = match (&media.path, gif) {
-        (Some(path), true) => Some(animation::frame(
-            ui,
-            path,
-            rect,
-            view.animate && response.hovered(),
-        )),
+        (Some(path), true) => Some(animation::frame(ui, path, rect, moving)),
         _ => None,
     };
     if let Some(animation::Frame::Ready(texture)) = &playing {
@@ -10547,6 +10543,10 @@ fn video(
                 Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
                 Color32::WHITE,
             );
+            // Standing still until the pointer comes, it would pass for a photo.
+            if !moving {
+                video_chip(ui, view, media, seconds, gif, rect);
+            }
         }
         if response
             .on_hover_cursor(egui::CursorIcon::PointingHand)
@@ -10658,36 +10658,7 @@ fn video(
                     );
                 }
             }
-            _ => {
-                let mut label = Vec::new();
-                if gif {
-                    label.push("GIF".to_owned());
-                }
-                if let Some(seconds) = seconds {
-                    label.push(crate::util::duration(seconds));
-                }
-                if media.path.is_none() {
-                    label.push(crate::util::bytes(media.size));
-                }
-                if !label.is_empty() {
-                    let galley = ui.painter().layout_no_wrap(
-                        label.join(" · "),
-                        theme::medium(11.5),
-                        Color32::WHITE,
-                    );
-                    let chip = Rect::from_min_size(
-                        pos2(rect.left() + 8.0, rect.bottom() - galley.size().y - 14.0),
-                        galley.size() + vec2(12.0, 6.0),
-                    );
-                    ui.painter().rect_filled(
-                        chip,
-                        chip.height() / 2.0,
-                        Color32::from_black_alpha(140),
-                    );
-                    ui.painter()
-                        .galley(chip.min + vec2(6.0, 3.0), galley, Color32::WHITE);
-                }
-            }
+            _ => video_chip(ui, view, media, seconds, gif, rect),
         }
     }
     let auto = ui.is_rect_visible(rect)
@@ -10716,6 +10687,42 @@ fn video(
         actions.push(expand_video_action(&message.id, path));
     }
     size.x
+}
+
+/// The chip in a video's corner saying what it is, how long it runs, and, while
+/// it is still to download, how large it is.
+fn video_chip(
+    ui: &egui::Ui,
+    view: &View<'_>,
+    media: &Media,
+    seconds: Option<u32>,
+    gif: bool,
+    rect: Rect,
+) {
+    let mut label = Vec::new();
+    if gif {
+        label.push(crate::i18n::gettext(view.locale, "GIF").into_owned());
+    }
+    if let Some(seconds) = seconds {
+        label.push(crate::util::duration(seconds));
+    }
+    if media.path.is_none() {
+        label.push(crate::util::bytes(media.size));
+    }
+    if label.is_empty() {
+        return;
+    }
+    let galley =
+        ui.painter()
+            .layout_no_wrap(label.join(" · "), theme::medium(11.5), Color32::WHITE);
+    let chip = Rect::from_min_size(
+        pos2(rect.left() + 8.0, rect.bottom() - galley.size().y - 14.0),
+        galley.size() + vec2(12.0, 6.0),
+    );
+    ui.painter()
+        .rect_filled(chip, chip.height() / 2.0, Color32::from_black_alpha(140));
+    ui.painter()
+        .galley(chip.min + vec2(6.0, 3.0), galley, Color32::WHITE);
 }
 
 /// What "Fill the window" does: the video covers the window, starting it
@@ -12848,6 +12855,86 @@ mod tests {
             pin_notices: &[],
         };
         check(&view);
+    }
+
+    /// A two-frame GIF on disk.
+    fn write_gif(path: &Path) {
+        use image::codecs::gif::GifEncoder;
+        let frame = |shade: u8| {
+            image::Frame::new(image::RgbaImage::from_pixel(
+                16,
+                16,
+                image::Rgba([shade, shade, shade, 255]),
+            ))
+        };
+        let file = crate::platform::sfs::File::create(path).unwrap();
+        GifEncoder::new(file)
+            .encode_frames([frame(0), frame(255)])
+            .unwrap();
+    }
+
+    #[test]
+    fn a_downloaded_gif_standing_still_says_it_is_a_gif() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("clip.gif");
+        write_gif(&path);
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let screen = Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 400.0));
+        let input = || egui::RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        // Decoding takes a thread a moment, and a chip drawn before then would
+        // not be the one this is about.
+        let started = crate::platform::Instant::now();
+        let mut ready = false;
+        while !ready && started.elapsed() < std::time::Duration::from_secs(10) {
+            let mut output = ctx.run_ui(input(), |ui| {
+                ready = matches!(
+                    animation::frame(ui, &path, screen, false),
+                    animation::Frame::Ready(_)
+                );
+            });
+            output.textures_delta.clear();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(ready, "the GIF's first frame decodes");
+        with_still_view(|view| {
+            let mut message = crate::archive::tests::message("1@s.whatsapp.net", "m1", 0, false);
+            let media = Media {
+                mime: "video/mp4".to_owned(),
+                size: 2_048,
+                width: Some(16),
+                height: Some(16),
+                album: None,
+                path: Some(path.clone()),
+                state: MediaState::Idle,
+            };
+            message.thumbnail = None;
+            let mut output = ctx.run_ui(input(), |ui| {
+                video(
+                    ui,
+                    view,
+                    &message,
+                    &media,
+                    None,
+                    true,
+                    300.0,
+                    &mut Vec::new(),
+                );
+            });
+            output.textures_delta.clear();
+            let words: Vec<String> = output
+                .shapes
+                .iter()
+                .filter_map(|clipped| match &clipped.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text().to_owned()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(words, ["GIF"], "and nothing about its download");
+        });
     }
 
     #[test]

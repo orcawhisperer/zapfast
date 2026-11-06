@@ -55,7 +55,7 @@ Without one, the app asks for a key in its settings.
 - GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video
   elements. Which formats play depends on the browser. GIF-style clips step through
-  the same element, which has not been tried on a real one yet.
+  the same element, playing while the pointer is over them.
 - Storage that survives a reload, kept to one tab at a time. The archive and the
   device store are encrypted. Each has a random key, wrapped by a master key the
   browser holds as non-extractable.
