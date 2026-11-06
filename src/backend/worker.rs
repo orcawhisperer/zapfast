@@ -13375,12 +13375,14 @@ impl Drop for Uploading {
 
 /// Encrypted media for `upload_stream` whose reads report how much has gone
 /// out.
+#[cfg(not(target_arch = "wasm32"))]
 struct Counted {
     data: Arc<Vec<u8>>,
     progress: Arc<std::sync::Mutex<Progress>>,
     gate: UploadGate,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl whatsapp_rust::wacore::upload::UploadSource for Counted {
     fn len(&self) -> u64 {
         self.data.len() as u64
@@ -13397,6 +13399,7 @@ impl whatsapp_rust::wacore::upload::UploadSource for Counted {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 struct CountedReader {
     data: Arc<Vec<u8>>,
     position: usize,
@@ -13404,6 +13407,7 @@ struct CountedReader {
     gate: UploadGate,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl io::Read for CountedReader {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         if self.gate.is_cancelled() {
@@ -13440,6 +13444,37 @@ async fn upload_media(
     if uploading.cancelled() {
         return Err(UPLOAD_CANCELLED.to_owned());
     }
+    // A page's fetch takes the whole body at once and does not say how much has
+    // gone, so there is no reader to count through, and the bar stays until it ends.
+    #[cfg(target_arch = "wasm32")]
+    {
+        let length = bytes.len() as u64;
+        let upload = client
+            .upload(bytes, media_type, UploadOptions::default())
+            .await
+            .map_err(|error| error.to_string())?;
+        if uploading.cancelled() {
+            return Err(UPLOAD_CANCELLED.to_owned());
+        }
+        uploading
+            .progress
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .report(length, length);
+        Ok(upload)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    upload_media_counted(client, bytes, media_type, uploading).await
+}
+
+/// Encrypts first and uploads through a reader, which reports how much has gone.
+#[cfg(not(target_arch = "wasm32"))]
+async fn upload_media_counted(
+    client: &Client,
+    bytes: Vec<u8>,
+    media_type: MediaType,
+    uploading: &Uploading,
+) -> Result<whatsapp_rust::upload::UploadResponse, String> {
     let file_length = bytes.len() as u64;
     let encrypted = crate::platform::spawn_blocking(move || {
         whatsapp_rust::wacore::upload::encrypt_media_with_key_and_sidecar(
