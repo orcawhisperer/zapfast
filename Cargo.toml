@@ -251,7 +251,7 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["BinaryType", "CloseEvent", "Event", "Headers", "MessageEvent", "Request", "RequestInit", "RequestMode", "RequestRedirect", "Response", "Crypto", "CryptoKey", "Document", "Element", "IdbDatabase", "IdbFactory", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "SubtleCrypto", "HtmlCanvasElement", "Location", "Navigator", "StorageManager", "WebSocket", "Window", "WorkerGlobalScope"] }
+web-sys = { version = "0.3", features = ["BinaryType", "CloseEvent", "Event", "Headers", "MessageEvent", "Request", "RequestInit", "RequestMode", "RequestRedirect", "Response", "Blob", "ClipboardEvent", "Crypto", "CryptoKey", "CssStyleDeclaration", "DataTransfer", "EventTarget", "File", "FileList", "HtmlAnchorElement", "HtmlElement", "HtmlInputElement", "Node", "Url", "Document", "Element", "IdbDatabase", "IdbFactory", "IdbObjectStore", "IdbOpenDbRequest", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "SubtleCrypto", "HtmlCanvasElement", "Location", "Navigator", "StorageManager", "WebSocket", "Window", "WorkerGlobalScope"] }
 # std::time::Instant panics on wasm32-unknown-unknown.
 web-time = "1"
 # Its clock asks the browser here.

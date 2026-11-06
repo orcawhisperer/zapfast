@@ -11618,6 +11618,15 @@ impl App {
 
     /// Handles dropped files and pasted images for the open chat.
     fn take_drops_and_pastes(&mut self, ctx: &egui::Context) {
+        // A page gets bytes rather than paths, and those take a moment to read.
+        #[cfg(target_arch = "wasm32")]
+        let dropped_here = {
+            let files = ctx.input(|input| input.raw.dropped_files.clone());
+            for file in files {
+                crate::web::picker::receive_drop(file, ctx.clone());
+            }
+            crate::web::picker::take_arrived()
+        };
         let (dropped, hovering) = ctx.input(|input| {
             let dropped: Vec<PathBuf> = input
                 .raw
@@ -11628,6 +11637,8 @@ impl App {
             let hovering = !input.raw.hovered_files.is_empty();
             (dropped, hovering)
         });
+        #[cfg(target_arch = "wasm32")]
+        let dropped = dropped_here;
         self.dropping = hovering && self.open_chat.is_some();
         let frame = ctx.cumulative_frame_nr();
         let drop_id = egui::Id::new("dropped-files-input-frame");

@@ -1,36 +1,34 @@
-//! `tokio::fs`'s names for the worker, on the browser's storage.
+//! `tokio::fs`'s names on the page's files, which never wait for a disk.
 
-use std::io::{Error, ErrorKind, Result};
+use std::io::Result;
 use std::path::Path;
 
-fn unavailable() -> Error {
-    Error::new(ErrorKind::Unsupported, "no file storage in this build yet")
+use crate::web::sfs;
+
+pub async fn read(path: impl AsRef<Path>) -> Result<Vec<u8>> {
+    sfs::read(path)
 }
 
-pub async fn read(_path: impl AsRef<Path>) -> Result<Vec<u8>> {
-    Err(unavailable())
+pub async fn write(path: impl AsRef<Path>, bytes: impl AsRef<[u8]>) -> Result<()> {
+    sfs::write(path, bytes)
 }
 
-pub async fn write(_path: impl AsRef<Path>, _bytes: impl AsRef<[u8]>) -> Result<()> {
-    Err(unavailable())
+pub async fn create_dir_all(path: impl AsRef<Path>) -> Result<()> {
+    sfs::create_dir_all(path)
 }
 
-pub async fn create_dir_all(_path: impl AsRef<Path>) -> Result<()> {
-    Err(unavailable())
+pub async fn remove_file(path: impl AsRef<Path>) -> Result<()> {
+    sfs::remove_file(path)
 }
 
-pub async fn remove_file(_path: impl AsRef<Path>) -> Result<()> {
-    Err(unavailable())
+pub async fn rename(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<()> {
+    sfs::rename(from, to)
 }
 
-pub async fn rename(_from: impl AsRef<Path>, _to: impl AsRef<Path>) -> Result<()> {
-    Err(unavailable())
+pub async fn metadata(path: impl AsRef<Path>) -> Result<sfs::Metadata> {
+    sfs::metadata(path)
 }
 
-pub async fn metadata(_path: impl AsRef<Path>) -> Result<std::fs::Metadata> {
-    Err(unavailable())
-}
-
-pub async fn copy(_from: impl AsRef<Path>, _to: impl AsRef<Path>) -> Result<u64> {
-    Err(unavailable())
+pub async fn copy(from: impl AsRef<Path>, to: impl AsRef<Path>) -> Result<u64> {
+    sfs::copy(from, to)
 }

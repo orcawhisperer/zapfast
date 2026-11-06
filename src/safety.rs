@@ -174,6 +174,10 @@ pub fn call_link(value: &str) -> Option<(String, bool)> {
 /// Unknown files, scripts, installers and application bundles can be revealed
 /// in their folder instead. Sender-provided MIME types cannot grant permission.
 pub fn can_open_attachment(path: &Path) -> bool {
+    // A page only offers it as a download, which the browser checks for itself.
+    if cfg!(target_arch = "wasm32") {
+        return true;
+    }
     let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
         return false;
     };

@@ -32,6 +32,8 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 - The interface with the sample chats: drawing, clicks, navigation, typing.
 - Without `?demo`, a real account: linking by QR code, syncing chats, sending and
   receiving messages, and staying linked across a reload.
+- Attachments from the picker, a drop, or a paste, and files offered as browser
+  downloads. Sending one has not been tried on an account yet.
 - Storage that survives a reload, kept to one tab at a time. The archive and the
   device store are encrypted. Each has a random key, wrapped by a master key the
   browser holds as non-extractable.
@@ -47,7 +49,8 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
   persistence. Clearing it unlinks the device.
 - The keys protect copied files, not a compromised page: code running in the page
   can ask the browser to use them. Whoever serves the page can change that code.
-- Attachments stay in memory only, and are downloaded again after a reload.
+- Attachments stay in memory only, and are downloaded again after a reload. A large
+  file takes that much memory while it is held.
 
 ## What does not work yet
 
@@ -62,8 +65,10 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
   history sync hold up drawing.
 - **Exporting a chat, and setting aside an unreadable archive.** Both need a second
   way into a database, which this storage does not offer.
-- **Attachments, notifications, the clipboard for pictures, cameras, calls, and
-  installing as an app.**
+- **Other file dialogs:** a profile or group picture, a wallpaper, a sound, stickers,
+  and saving elsewhere still open nothing. Attachments have their picker.
+- **Copying a picture to the clipboard.** Pasting one works.
+- **Notifications, cameras, calls, and installing as an app.**
 
 ## What a browser cannot do
 

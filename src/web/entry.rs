@@ -163,6 +163,7 @@ async fn run() -> Result<(), String> {
             eframe::WebOptions::default(),
             Box::new(move |cc| {
                 waker.attach(&cc.egui_ctx);
+                crate::web::picker::listen_for_pastes(cc.egui_ctx.clone());
                 cc.egui_ctx
                     .add_bytes_loader(std::sync::Arc::new(crate::web::images::PageFiles));
                 let app = make_app(&cc.egui_ctx, &waker)?;

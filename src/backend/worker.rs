@@ -7537,6 +7537,19 @@ impl Worker {
                     )),
                 }
             }
+            #[cfg(target_arch = "wasm32")]
+            Command::PickFiles { chat, documents } => {
+                let commands = self.commands.clone();
+                crate::platform::spawn(async move {
+                    let paths = crate::web::picker::pick_files().await;
+                    let _ = commands.send(Command::Picked {
+                        chat,
+                        paths,
+                        documents,
+                    });
+                });
+            }
+            #[cfg(not(target_arch = "wasm32"))]
             Command::PickFiles { chat, documents } => {
                 let commands = self.commands.clone();
                 crate::platform::spawn_blocking(move || {

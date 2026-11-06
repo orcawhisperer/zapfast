@@ -400,15 +400,13 @@ fn file_size(ctx: &egui::Context, path: &std::path::Path) -> Option<u64> {
     });
     let path = path.to_owned();
     let ctx = ctx.clone();
-    let _ = std::thread::Builder::new()
-        .name("attachment-info".into())
-        .spawn(move || {
-            let _ = size.set(
-                crate::platform::sfs::metadata(path)
-                    .ok()
-                    .map(|info| info.len()),
-            );
-            ctx.request_repaint();
-        });
+    let _ = crate::platform::run_detached("attachment-info", move || {
+        let _ = size.set(
+            crate::platform::sfs::metadata(path)
+                .ok()
+                .map(|info| info.len()),
+        );
+        ctx.request_repaint();
+    });
     None
 }

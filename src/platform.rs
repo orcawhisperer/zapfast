@@ -97,6 +97,22 @@ pub use tokio::{
     time,
 };
 
+/// Runs `work` away from the window, once, without waiting for it. It must not
+/// wait on anything itself: a page runs it on its one thread, on a later turn.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_detached(name: &str, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(work)
+        .map(|_| ())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn run_detached(_name: &str, work: impl FnOnce() + Send + 'static) -> std::io::Result<()> {
+    wasm_bindgen_futures::spawn_local(async move { work() });
+    Ok(())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio::task::AbortHandle;
 

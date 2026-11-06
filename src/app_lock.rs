@@ -411,12 +411,10 @@ impl AppLock {
 
     fn spawn(&mut self, work: Work, wake: impl Fn() + Send + 'static) {
         let (sender, receiver) = std::sync::mpsc::channel();
-        let spawned = std::thread::Builder::new()
-            .name("app-lock".into())
-            .spawn(move || {
-                let _ = sender.send(run(work));
-                wake();
-            });
+        let spawned = crate::platform::run_detached("app-lock", move || {
+            let _ = sender.send(run(work));
+            wake();
+        });
         match spawned {
             Ok(_) => self.job = Some(receiver),
             Err(error) => log::warn!("could not check the app lock password: {error}"),

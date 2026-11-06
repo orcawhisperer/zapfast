@@ -9,6 +9,7 @@ pub mod idb;
 pub mod images;
 pub mod keys;
 pub mod open;
+pub mod picker;
 pub mod rfd;
 pub mod runtime;
 pub mod sfs;

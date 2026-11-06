@@ -252,12 +252,10 @@ impl CustomImage {
             if let Some(path) = self.path.clone() {
                 let (sender, receiver) = mpsc::channel();
                 let waker = waker.clone();
-                let spawned = std::thread::Builder::new()
-                    .name("wallpaper-image".into())
-                    .spawn(move || {
-                        let _ = sender.send(decode(&path));
-                        waker.wake();
-                    });
+                let spawned = crate::platform::run_detached("wallpaper-image", move || {
+                    let _ = sender.send(decode(&path));
+                    waker.wake();
+                });
                 match spawned {
                     Ok(_) => self.pending = Some(receiver),
                     Err(error) => log::debug!("could not start decoding the wallpaper: {error}"),

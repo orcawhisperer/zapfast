@@ -381,21 +381,19 @@ fn start_decode(ctx: &egui::Context, inbox: &Inbox, path: &Path, all: bool) -> S
     let ctx = ctx.clone();
     let inbox = inbox.clone();
     let limit = if all { MAX_FRAMES } else { 1 };
-    let spawned = std::thread::Builder::new()
-        .name("animation-decode".into())
-        .spawn(move || {
-            let _slot = slot;
-            // Convert decoder panics to failed results.
-            let decoded =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&file, limit)))
-                    .unwrap_or(None);
-            inbox
-                .0
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push((file, decoded, all));
-            ctx.request_repaint();
-        });
+    let spawned = crate::platform::run_detached("animation-decode", move || {
+        let _slot = slot;
+        // Convert decoder panics to failed results.
+        let decoded =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode(&file, limit)))
+                .unwrap_or(None);
+        inbox
+            .0
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push((file, decoded, all));
+        ctx.request_repaint();
+    });
     if spawned.is_err() {
         return Start::Failed;
     }
