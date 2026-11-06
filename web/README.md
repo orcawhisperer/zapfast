@@ -17,6 +17,11 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
 <http://localhost:8000/> for a real account. The page needs a secure context, which
 `localhost` counts as: elsewhere it has to be served over HTTPS.
 
+GIF search needs a GIPHY key. `web/build.sh` reads `GIPHY_API_KEY` from a `.env` file
+in the repository's root, which git ignores. The key goes into the built program, where
+anyone who loads the page can read it, so keep a personal key to a build for yourself.
+Without one, the app asks for a key in its settings.
+
 ## How it fits together
 
 - `src/platform.rs` names what differs between the desktop and the browser:
@@ -39,6 +44,7 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
   Browsers that only offer them through a service worker, such as on Android, show
   none. With the browser closed nothing arrives.
 - Installing as an app, and starting without a network on the archive already held.
+- GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video
   elements. Which formats play depends on the browser. GIF-style clips step through
   the same element, which has not been tried on a real one yet.
@@ -57,8 +63,9 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
   persistence. Clearing it unlinks the device.
 - The keys protect copied files, not a compromised page: code running in the page
   can ask the browser to use them. Whoever serves the page can change that code.
-- Attachments stay in memory only, and are downloaded again after a reload. A large
-  file takes that much memory while it is held.
+- Media stays in the browser's storage, encrypted, and comes back into memory when
+  it is needed. Up to 256 MiB is held at a time. A file over the browser's quota lasts
+  only as long as the page, and is downloaded again after a reload.
 
 ## What does not work yet
 
@@ -66,9 +73,8 @@ Then open <http://localhost:8000/?demo> for the sample chats, or
   browser. Menus and tooltips keep the fonts' monochrome glyphs.
 - **Recording voice messages, and a call's camera and sound.** The Opus and H.264
   stand-ins always refuse.
-- **GIF search and Signal sticker packs.** They still use the blocking client,
-  which always fails in a page, rather than fetch. Signal's servers also refuse
-  requests from a page.
+- **Signal sticker packs.** They still use the blocking client, which always fails
+  in a page, and Signal's servers refuse requests from a page anyway.
 - **Background work.** The app shares the page's one thread, so decoding and a
   history sync hold up drawing.
 - **Exporting a chat, and setting aside an unreadable archive.** Both need a second

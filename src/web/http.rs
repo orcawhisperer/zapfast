@@ -167,8 +167,19 @@ async fn read_watched(response: &Response, report: &dyn Fn(u64)) -> Result<Vec<u
     }
 }
 
-/// One request and its whole answer, including 4xx and 5xx.
+/// Fetches a public address, following any redirect, for what the library's checks
+/// do not cover, such as GIF search.
+pub async fn fetch_public(url: &str) -> Result<HttpResponse> {
+    send(&HttpRequest::get(url), RequestRedirect::Follow).await
+}
+
+/// One request and its whole answer, including 4xx and 5xx. A redirect is refused,
+/// since the core checks a media host before asking and cannot check another.
 pub async fn execute(request: &HttpRequest) -> Result<HttpResponse> {
+    send(request, RequestRedirect::Error).await
+}
+
+async fn send(request: &HttpRequest, redirect: RequestRedirect) -> Result<HttpResponse> {
     if let Some(body) = &request.body {
         let length = body.len() as u64;
         let watcher = WATCHERS.with_borrow(|watchers| {
@@ -185,8 +196,7 @@ pub async fn execute(request: &HttpRequest) -> Result<HttpResponse> {
     let init = RequestInit::new();
     init.set_method(&request.method);
     init.set_mode(RequestMode::Cors);
-    // The core checks a media host before asking and cannot check a redirect.
-    init.set_redirect(RequestRedirect::Error);
+    init.set_redirect(redirect);
     if let Some(body) = &request.body {
         init.set_body(&js_sys::Uint8Array::from(body.as_ref()));
     }

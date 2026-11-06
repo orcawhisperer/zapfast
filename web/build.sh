@@ -13,6 +13,12 @@ for arg in "$@"; do
     esac
 done
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/wasm}"
+# A GIPHY key from .env, if there is one, goes into the program that is built, where
+# anyone who loads the page can read it. Keep a personal key to a build for yourself.
+if [ -z "${ZAPFAST_GIPHY_KEY:-}" ] && [ -f .env ]; then
+    ZAPFAST_GIPHY_KEY=$(sed -n 's/^GIPHY_API_KEY=//p' .env | tr -d '"'"'"' \r')
+    export ZAPFAST_GIPHY_KEY
+fi
 # wasm-bindgen reads the whole module into memory several times over, and debug
 # information is most of a development build. Function names stay for stack traces.
 export CARGO_PROFILE_DEV_STRIP=debuginfo

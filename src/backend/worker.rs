@@ -8315,6 +8315,17 @@ impl Worker {
             } => {
                 let commands = self.commands.clone();
                 let dir = self.dirs.cache.join("gifs");
+                #[cfg(target_arch = "wasm32")]
+                crate::platform::spawn(async move {
+                    let results = search_gifs(&query, &key, &dir, offset).await;
+                    let _ = commands.send(Command::GifResults {
+                        query,
+                        offset,
+                        request,
+                        results,
+                    });
+                });
+                #[cfg(not(target_arch = "wasm32"))]
                 crate::platform::spawn_blocking(move || {
                     let results = search_gifs(&query, &key, &dir, offset);
                     let _ = commands.send(Command::GifResults {
@@ -8328,6 +8339,18 @@ impl Worker {
             Command::FetchGifAnimation { id, url, extension } => {
                 let commands = self.commands.clone();
                 let dir = self.dirs.cache.join("gifs");
+                #[cfg(target_arch = "wasm32")]
+                crate::platform::spawn(async move {
+                    let _ = crate::platform::sfs::create_dir_all(&dir);
+                    let path = gif_path(&dir, &id, &extension);
+                    let path = if path.found() {
+                        Some(path)
+                    } else {
+                        fetch_gif(&url, &path).await
+                    };
+                    let _ = commands.send(Command::GifAnimated { id, path });
+                });
+                #[cfg(not(target_arch = "wasm32"))]
                 crate::platform::spawn_blocking(move || {
                     let _ = crate::platform::sfs::create_dir_all(&dir);
                     let path = gif_path(&dir, &id, &extension);
@@ -11861,7 +11884,19 @@ impl Worker {
         let me = self.me();
         crate::platform::spawn(async move {
             let outcome = async {
+                #[cfg(target_arch = "wasm32")]
+                let bytes = {
+                    let response = crate::web::http::fetch_public(&gif.mp4)
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    if !(200..300).contains(&response.status_code) {
+                        return Err(format!("http status: {}", response.status_code));
+                    }
+                    response.body
+                };
+                #[cfg(not(target_arch = "wasm32"))]
                 let url = gif.mp4.clone();
+                #[cfg(not(target_arch = "wasm32"))]
                 let bytes = crate::platform::spawn_blocking(move || {
                     crate::proxy::agent()
                         .get(&url)
@@ -13819,23 +13854,20 @@ fn percent_encode(text: &str) -> String {
     out
 }
 
-/// A search result with its still and animated renditions.
-type GifResult = (Gif, Option<String>, Option<(String, &'static str)>);
-
 /// Searches GIPHY and downloads result stills. Animated previews are fetched
 /// when their tiles first show. Empty queries list trending GIFs.
-fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifPage, GifError> {
-    let plain = |message: String| GifError {
-        message,
-        bad_key: false,
-    };
+/// A result, with the addresses of its still and animated pictures.
+type GifRow = (Gif, Option<String>, Option<(String, &'static str)>);
+
+/// The address that asks GIPHY for a page of results.
+fn gif_search_url(query: &str, key: &str, offset: usize) -> Result<String, GifError> {
     if key.is_empty() {
         return Err(GifError {
             message: "GIF search needs a GIPHY API key.".to_owned(),
             bad_key: true,
         });
     }
-    let url = if query.trim().is_empty() {
+    Ok(if query.trim().is_empty() {
         format!(
             "https://api.giphy.com/v1/gifs/trending?api_key={key}&limit=24&offset={offset}&rating=pg-13"
         )
@@ -13844,28 +13876,16 @@ fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifP
             "https://api.giphy.com/v1/gifs/search?api_key={key}&q={}&limit=24&offset={offset}&rating=pg-13",
             percent_encode(query.trim())
         )
+    })
+}
+
+/// A page of GIPHY's answer: its results, how many it holds, and how many in all.
+fn parse_gif_results(body: &str) -> Result<(Vec<GifRow>, usize, Option<u64>), GifError> {
+    let plain = |message: String| GifError {
+        message,
+        bad_key: false,
     };
-    let body = match crate::proxy::agent()
-        .get(&url)
-        .config()
-        .timeout_global(Some(GIF_TIMEOUT))
-        .build()
-        .call()
-    {
-        Ok(mut response) => response
-            .body_mut()
-            .read_to_string()
-            .map_err(|error| plain(format!("GIPHY request failed: {error}")))?,
-        // Treat 401 and 403 as API-key failures for the picker.
-        Err(ureq::Error::StatusCode(code @ (401 | 403))) => {
-            return Err(GifError {
-                message: format!("GIPHY rejected the API key (error {code})."),
-                bad_key: true,
-            });
-        }
-        Err(error) => return Err(plain(format!("GIPHY request failed: {error}"))),
-    };
-    let json: serde_json::Value = serde_json::from_str(&body)
+    let json: serde_json::Value = serde_json::from_str(body)
         .map_err(|error| plain(format!("Invalid GIPHY response: {error}")))?;
     if let Some(message) = json["meta"]["msg"].as_str()
         && let Some(status) = json["meta"]["status"]
@@ -13880,8 +13900,7 @@ fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifP
     let data = json["data"]
         .as_array()
         .ok_or_else(|| plain("GIPHY response contained no results".to_owned()))?;
-    crate::platform::sfs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
-    let mut gifs: Vec<GifResult> = data
+    let gifs = data
         .iter()
         .filter_map(|item| {
             let id = item["id"].as_str()?.to_owned();
@@ -13926,44 +13945,126 @@ fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifP
             ))
         })
         .collect();
+    Ok((gifs, data.len(), json["pagination"]["total_count"].as_u64()))
+}
+
+/// Notes the pictures already stored for a result, and returns the still it still
+/// needs, with where to put it.
+fn gif_cached_pictures(dir: &Path, row: &mut GifRow) -> Option<(String, PathBuf)> {
+    let (gif, still, animated) = row;
+    let still_path = still.as_ref().map(|_| gif_path(dir, &gif.id, "jpg"));
+    let animated_path = animated
+        .as_ref()
+        .map(|(_, extension)| gif_path(dir, &gif.id, extension));
+    if let Some(path) = &still_path
+        && path.found()
+    {
+        gif.still = Some(path.clone());
+    }
+    if let Some(path) = &animated_path
+        && path.found()
+    {
+        gif.animated = Some(path.clone());
+    }
+    if gif.still.is_some() {
+        return None;
+    }
+    still.take().zip(still_path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn search_gifs(query: &str, key: &str, dir: &Path, offset: usize) -> Result<GifPage, GifError> {
+    let plain = |message: String| GifError {
+        message,
+        bad_key: false,
+    };
+    let url = gif_search_url(query, key, offset)?;
+    let body = match crate::proxy::agent()
+        .get(&url)
+        .config()
+        .timeout_global(Some(GIF_TIMEOUT))
+        .build()
+        .call()
+    {
+        Ok(mut response) => response
+            .body_mut()
+            .read_to_string()
+            .map_err(|error| plain(format!("GIPHY request failed: {error}")))?,
+        // Treat 401 and 403 as API-key failures for the picker.
+        Err(ureq::Error::StatusCode(code @ (401 | 403))) => {
+            return Err(GifError {
+                message: format!("GIPHY rejected the API key (error {code})."),
+                bad_key: true,
+            });
+        }
+        Err(error) => return Err(plain(format!("GIPHY request failed: {error}"))),
+    };
+    let (mut gifs, count, total) = parse_gif_results(&body)?;
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
     std::thread::scope(|scope| {
-        for (gif, still, animated) in &mut gifs {
-            let still_path = still.as_ref().map(|_| gif_path(dir, &gif.id, "jpg"));
-            let animated_path = animated
-                .as_ref()
-                .map(|(_, extension)| gif_path(dir, &gif.id, extension));
-            if let Some(path) = &still_path
-                && path.found()
-            {
-                gif.still = Some(path.clone());
-            }
-            if let Some(path) = &animated_path
-                && path.found()
-            {
-                gif.animated = Some(path.clone());
-            }
-            if still.is_none() || gif.still.is_some() {
+        for row in &mut gifs {
+            let Some((url, path)) = gif_cached_pictures(dir, row) else {
                 continue;
-            }
-            let still = still.take();
-            let still_slot = &mut gif.still;
+            };
+            let still_slot = &mut row.0.still;
             scope.spawn(move || {
-                if let Some(url) = still
-                    && let Some(path) = still_path
-                {
-                    *still_slot = fetch_gif(&url, &path);
-                }
+                *still_slot = fetch_gif(&url, &path);
             });
         }
     });
     Ok(GifPage {
         gifs: gifs.into_iter().map(|(gif, _, _)| gif).collect(),
-        next_offset: gif_next_offset(
-            query,
-            offset,
-            data.len(),
-            json["pagination"]["total_count"].as_u64(),
-        ),
+        next_offset: gif_next_offset(query, offset, count, total),
+    })
+}
+
+/// The same search through the browser's fetch, which has no threads to wait on.
+#[cfg(target_arch = "wasm32")]
+async fn search_gifs(
+    query: &str,
+    key: &str,
+    dir: &Path,
+    offset: usize,
+) -> Result<GifPage, GifError> {
+    let plain = |message: String| GifError {
+        message,
+        bad_key: false,
+    };
+    let url = gif_search_url(query, key, offset)?;
+    // An error here says nothing of the address, which holds the key.
+    let response = crate::web::http::fetch_public(&url)
+        .await
+        .map_err(|error| plain(format!("GIPHY request failed: {error}")))?;
+    if matches!(response.status_code, 401 | 403) {
+        return Err(GifError {
+            message: format!(
+                "GIPHY rejected the API key (error {}).",
+                response.status_code
+            ),
+            bad_key: true,
+        });
+    }
+    let body = String::from_utf8_lossy(&response.body);
+    let (mut gifs, count, total) = parse_gif_results(&body)?;
+    crate::platform::sfs::create_dir_all(dir).map_err(|error| plain(error.to_string()))?;
+    let stills = futures::future::join_all(gifs.iter_mut().map(|row| {
+        let wanted = gif_cached_pictures(dir, row);
+        async move {
+            match wanted {
+                Some((url, path)) => fetch_gif(&url, &path).await,
+                None => None,
+            }
+        }
+    }))
+    .await;
+    for (row, still) in gifs.iter_mut().zip(stills) {
+        if still.is_some() {
+            row.0.still = still;
+        }
+    }
+    Ok(GifPage {
+        gifs: gifs.into_iter().map(|(gif, _, _)| gif).collect(),
+        next_offset: gif_next_offset(query, offset, count, total),
     })
 }
 
@@ -13985,6 +14086,17 @@ fn gif_rendition(images: &serde_json::Value) -> Option<(String, &'static str)> {
 }
 
 /// Downloads one GIF thumbnail, returning its path once written.
+#[cfg(target_arch = "wasm32")]
+async fn fetch_gif(url: &str, path: &Path) -> Option<PathBuf> {
+    let response = crate::web::http::fetch_public(url).await.ok()?;
+    (200..300)
+        .contains(&response.status_code)
+        .then(|| store_gif(path, &response.body))
+        .flatten()
+}
+
+/// Downloads one GIF thumbnail, returning its path once written.
+#[cfg(not(target_arch = "wasm32"))]
 fn fetch_gif(url: &str, path: &Path) -> Option<PathBuf> {
     let bytes = crate::proxy::agent()
         .get(url)
