@@ -9,6 +9,7 @@
 //! raw H.264 that ffmpeg and other tools read (`ffmpeg -i received.h264 out.mp4`). That is the
 //! picture of both people on the call, so only set it for a call whose other side agreed.
 
+use std::borrow::Cow;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -16,6 +17,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 /// The environment variable that names the folder a call's video is dumped to.
 pub const DUMP_VARIABLE: &str = "ZAPFAST_CALL_VIDEO_DUMP";
+
+/// The NAL unit types read here (H.264 table 7-1).
+const IDR: u8 = 5;
+const SPS: u8 = 7;
+const PPS: u8 = 8;
+const DELIMITER: u8 = 9;
 
 /// The NAL units of an Annex-B access unit, each without its start code.
 pub fn nal_units(access_unit: &[u8]) -> impl Iterator<Item = &[u8]> {
@@ -87,6 +94,79 @@ pub fn stream_profile(access_unit: &[u8]) -> Option<StreamProfile> {
             }),
             _ => None,
         })
+}
+
+/// A stream's parameter sets, kept for a decoder that takes whole pictures. A peer may send them in
+/// an access unit of their own, ahead of the picture they belong to, which the library marks as a
+/// keyframe. openh264 takes that, as it remembers them, but a browser's decoder is handed units it
+/// can start from and closes on one without a picture, then again on the picture without its sets.
+#[derive(Debug, Default)]
+pub struct ParameterSets {
+    sps: Vec<u8>,
+    pps: Vec<u8>,
+}
+
+impl ParameterSets {
+    /// Notes the sets in an access unit and gives back what a decoder should have of it: `None`
+    /// when it has no picture, and an IDR picture with the sets it came without in front of it, so
+    /// a decoder can start from any of them, however long ago the sets went by.
+    pub fn complete<'a>(&mut self, access_unit: &'a [u8]) -> Option<Cow<'a, [u8]>> {
+        let (mut sps, mut pps) = (Vec::new(), Vec::new());
+        let (mut picture, mut idr) = (false, false);
+        for unit in nal_units(access_unit) {
+            match unit.first().map(|header| header & 0x1f) {
+                Some(SPS) => push_unit(&mut sps, unit),
+                Some(PPS) => push_unit(&mut pps, unit),
+                Some(IDR) => (picture, idr) = (true, true),
+                Some(1..=4) => picture = true,
+                _ => {}
+            }
+        }
+        let (came_with_sps, came_with_pps) = (!sps.is_empty(), !pps.is_empty());
+        if came_with_sps {
+            self.sps = sps;
+        }
+        if came_with_pps {
+            self.pps = pps;
+        }
+        if !picture {
+            return None;
+        }
+        if !idr || (came_with_sps && came_with_pps) {
+            return Some(Cow::Borrowed(access_unit));
+        }
+        // After any delimiter, which has to stay first.
+        let mut whole = Vec::with_capacity(access_unit.len() + self.sps.len() + self.pps.len());
+        let mut placed = false;
+        for unit in nal_units(access_unit) {
+            if !placed
+                && unit
+                    .first()
+                    .is_some_and(|header| header & 0x1f != DELIMITER)
+            {
+                placed = true;
+                if !came_with_sps {
+                    whole.extend_from_slice(&self.sps);
+                }
+                if !came_with_pps {
+                    whole.extend_from_slice(&self.pps);
+                }
+            }
+            push_unit(&mut whole, unit);
+        }
+        Some(Cow::Owned(whole))
+    }
+
+    /// What the newest sequence parameter set says of the stream.
+    pub fn profile(&self) -> Option<StreamProfile> {
+        stream_profile(&self.sps)
+    }
+}
+
+/// Adds a NAL unit to an Annex-B buffer.
+fn push_unit(to: &mut Vec<u8>, unit: &[u8]) {
+    to.extend_from_slice(&[0, 0, 0, 1]);
+    to.extend_from_slice(unit);
 }
 
 /// Counts of one call's pictures, both ways, read and reset by the call's heartbeat.
@@ -273,6 +353,71 @@ mod tests {
         );
         assert_eq!(profile.name(), "Constrained Baseline");
         assert_eq!(stream_profile(&[0, 0, 1, 0x41, 0x9a]), None);
+    }
+
+    /// The types of an access unit's NAL units.
+    fn types(unit: &[u8]) -> Vec<u8> {
+        nal_units(unit).map(|nal| nal[0] & 0x1f).collect()
+    }
+
+    const SETTINGS_ALONE: &[u8] = &[0, 0, 0, 1, 0x67, 66, 0xc0, 31, 0xaa, 0, 0, 1, 0x68, 0xce];
+    const BARE_IDR: &[u8] = &[0, 0, 0, 1, 0x09, 0xf0, 0, 0, 1, 0x65, 0x88];
+    const DELTA: &[u8] = &[0, 0, 1, 0x41, 0x9a];
+
+    #[test]
+    fn settings_alone_wait_for_the_picture_they_belong_to() {
+        let mut sets = ParameterSets::default();
+        assert_eq!(sets.complete(SETTINGS_ALONE), None, "nothing to decode yet");
+        let whole = sets.complete(BARE_IDR).expect("a picture");
+        assert_eq!(types(&whole), [9, 7, 8, 5], "the delimiter stays first");
+        assert_eq!(stream_profile(&whole).map(|seen| seen.level), Some(31));
+    }
+
+    #[test]
+    fn a_decoder_can_restart_from_a_later_idr_without_settings() {
+        let mut sets = ParameterSets::default();
+        sets.complete(SETTINGS_ALONE);
+        sets.complete(BARE_IDR);
+        sets.complete(DELTA);
+        assert_eq!(types(&sets.complete(BARE_IDR).unwrap()), [9, 7, 8, 5]);
+        assert_eq!(sets.profile().map(|seen| seen.profile), Some(66));
+    }
+
+    #[test]
+    fn a_keyframe_with_its_settings_and_a_delta_frame_pass_untouched() {
+        let mut sets = ParameterSets::default();
+        let keyframe = keyframe();
+        assert!(matches!(sets.complete(&keyframe), Some(Cow::Borrowed(_))));
+        assert!(matches!(sets.complete(DELTA), Some(Cow::Borrowed(_))));
+    }
+
+    #[test]
+    fn settings_ahead_of_a_delta_frame_stay_and_do_not_make_it_a_keyframe() {
+        let mut sets = ParameterSets::default();
+        let mut unit = SETTINGS_ALONE.to_vec();
+        unit.extend_from_slice(DELTA);
+        let passed = sets.complete(&unit).expect("a picture");
+        assert_eq!(&*passed, &unit[..]);
+        assert!(!has_idr(&passed));
+        assert_eq!(types(&sets.complete(BARE_IDR).unwrap()), [9, 7, 8, 5]);
+    }
+
+    #[test]
+    fn newer_settings_replace_older_ones_and_only_the_missing_are_added() {
+        let mut sets = ParameterSets::default();
+        sets.complete(SETTINGS_ALONE);
+        // A new SPS alongside the picture: the PPS is the one thing it lacks.
+        let unit = [&[0, 0, 0, 1, 0x67, 100, 0, 40][..], &[0, 0, 1, 0x65, 0x88]].concat();
+        let whole = sets.complete(&unit).expect("a picture");
+        assert_eq!(types(&whole), [8, 7, 5]);
+        assert_eq!(sets.profile().map(|seen| seen.profile), Some(100));
+    }
+
+    #[test]
+    fn an_idr_with_no_settings_ever_seen_is_left_for_the_decoder_to_refuse() {
+        let mut sets = ParameterSets::default();
+        assert_eq!(types(&sets.complete(BARE_IDR).unwrap()), [9, 5]);
+        assert_eq!(sets.profile(), None);
     }
 
     #[test]

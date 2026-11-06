@@ -65,7 +65,9 @@ Without one, the app asks for a key in its settings.
   plain Opus cannot be decoded, as that needs libopus, so such a call is refused.
 - Video in a call, through WebCodecs and the same rate control as the desktop's. A browser
   without H.264 in WebCodecs goes on without the picture it cannot make or show, and says so
-  in the log. Each picture shown is copied out of a canvas, so large ones cost the page.
+  in the log. Each picture shown is copied out of a canvas, so large ones cost the page. A peer's
+  parameter sets are joined to the picture they belong to, as a browser's decoder closes on them
+  alone. If the camera will not open, the camera button says why and the call goes on without it.
 - Installing as an app, and starting without a network on the archive already held.
 - GIF search and sending GIFs, through fetch.
 - Playing voice messages and videos, through the browser's own audio and video

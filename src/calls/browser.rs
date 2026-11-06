@@ -137,6 +137,21 @@ fn encoder_config(size: (usize, usize), bitrate: u32, fps: u32) -> Result<JsValu
     ])
 }
 
+/// Why the camera did not open, in words for the person on the call.
+fn camera_refusal(error: &JsValue) -> anyhow::Error {
+    let name = error
+        .dyn_ref::<js_sys::Error>()
+        .map(|error| String::from(error.name()))
+        .unwrap_or_default();
+    log::warn!("[CALL] the browser would not open the camera: {name}");
+    anyhow!(match name.as_str() {
+        "NotAllowedError" | "SecurityError" => "The browser was not allowed to use the camera",
+        "NotFoundError" | "OverconstrainedError" => "No camera was found",
+        "NotReadableError" | "AbortError" => "The camera is in use elsewhere",
+        _ => "Could not open the camera",
+    })
+}
+
 /// Asks for the camera, up to the largest size a call sends.
 async fn open_camera(device: Option<&str>) -> Result<MediaStream, JsValue> {
     let ideal = |value: u32| object(&[("ideal", value.into())]);
@@ -271,7 +286,10 @@ impl Encoder {
         };
         let error = {
             let failed = Rc::clone(failed);
-            Closure::<dyn FnMut(JsValue)>::new(move |_: JsValue| failed.set(true))
+            Closure::<dyn FnMut(JsValue)>::new(move |error: JsValue| {
+                log::warn!("{}", js_error("[CALL] the camera encoder failed", error));
+                failed.set(true);
+            })
         };
         let encoder = VideoEncoder::new(&object(&[
             ("output", chunks.as_ref().clone()),
@@ -328,7 +346,7 @@ impl CameraCapture {
         }
         let stream = open_camera(device.as_deref())
             .await
-            .map_err(|error| js_error("the camera", error))?;
+            .map_err(|error| camera_refusal(&error))?;
         let video = camera_element(&stream).map_err(|error| js_error("the camera", error))?;
         // It plays once it is asked to, and its size is known once it has.
         let played = match video.play() {
@@ -552,6 +570,8 @@ async fn run_capture(
 /// One sender's picture being decoded.
 struct RemoteStream {
     decoder: Option<RemoteDecoder>,
+    /// The peer's parameter sets, which a keyframe may come without.
+    sets: crate::call_diag::ParameterSets,
     /// Whether a keyframe has arrived since the decoder last lost track.
     started: bool,
     waiting: FirstKeyframe,
@@ -627,7 +647,10 @@ async fn new_decoder(
     };
     let error = {
         let broke = Rc::clone(&stream.broke);
-        Closure::<dyn FnMut(JsValue)>::new(move |_: JsValue| broke.set(true))
+        Closure::<dyn FnMut(JsValue)>::new(move |error: JsValue| {
+            log::warn!("{}", js_error("[CALL] the video decoder failed", error));
+            broke.set(true);
+        })
     };
     let decoder = VideoDecoder::new_decoder(&object(&[
         ("output", frames.as_ref().clone()),
@@ -680,6 +703,7 @@ pub(super) fn decode_remote(
                     key.clone(),
                     RemoteStream {
                         decoder: None,
+                        sets: Default::default(),
                         started: false,
                         waiting: FirstKeyframe::default(),
                         orientation: Rc::default(),
@@ -691,6 +715,11 @@ pub(super) fn decode_remote(
             let Some(stream) = streams.get_mut(&key) else {
                 continue;
             };
+            let Some(unit) = stream.sets.complete(&frame.data) else {
+                continue;
+            };
+            // The frame's own mark also covers parameter sets, which nothing can start from.
+            let keyframe = crate::call_diag::has_idr(&unit);
             let backlog = stream
                 .decoder
                 .as_ref()
@@ -701,7 +730,7 @@ pub(super) fn decode_remote(
                 stream.started = false;
             }
             if !stream.started {
-                if !frame.keyframe {
+                if !keyframe {
                     // None of this can be decoded until a keyframe, and a peer sends one only
                     // when asked.
                     if stream.waiting.ask(Instant::now()) {
@@ -713,7 +742,7 @@ pub(super) fn decode_remote(
             }
             stream.orientation.set(frame.orientation & 0x03);
             if stream.decoder.is_none() {
-                let codec = seen.map_or_else(
+                let codec = stream.sets.profile().map_or_else(
                     || ENCODED_AS.to_owned(),
                     |seen| {
                         format!(
@@ -741,14 +770,18 @@ pub(super) fn decode_remote(
             let timestamp = stream.next_timestamp;
             stream.next_timestamp += 40_000.0;
             let chunk = object(&[
-                ("type", if frame.keyframe { "key" } else { "delta" }.into()),
+                ("type", if keyframe { "key" } else { "delta" }.into()),
                 ("timestamp", timestamp.into()),
-                ("data", Uint8Array::from(frame.data.as_slice()).into()),
+                ("data", Uint8Array::from(&*unit).into()),
             ])
             .and_then(|init| EncodedVideoChunk::new(&init));
             match chunk.and_then(|chunk| remote.decoder.decode(&chunk)) {
                 Ok(()) => {}
-                Err(_) => {
+                Err(error) => {
+                    log::warn!(
+                        "{}",
+                        js_error("[CALL] the video decoder refused a picture", error)
+                    );
                     diag.counters.undecodable();
                     let _ = ticks.try_send(VideoTick::Lost);
                     stream.broke.set(true);
